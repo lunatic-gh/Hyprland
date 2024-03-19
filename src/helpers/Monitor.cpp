@@ -164,8 +164,6 @@ void CMonitor::onConnect(bool noRule) {
 
     wlr_damage_ring_set_bounds(&damage, vecTransformedSize.x, vecTransformedSize.y);
 
-    wlr_xcursor_manager_load(g_pCompositor->m_sWLRXCursorMgr, scale);
-
     Debug::log(LOG, "Added new monitor with name {} at {:j0} with size {:j0}, pointer {:x}", output->name, vecPosition, vecPixelSize, (uintptr_t)output);
 
     setupDefaultWS(monitorRule);
@@ -191,8 +189,6 @@ void CMonitor::onConnect(bool noRule) {
 
     if (!g_pCompositor->m_pLastMonitor) // set the last monitor if it isnt set yet
         g_pCompositor->setActiveMonitor(this);
-
-    wlr_xcursor_manager_load(g_pCompositor->m_sWLRXCursorMgr, scale);
 
     g_pHyprRenderer->arrangeLayersForMonitor(ID);
     g_pLayoutManager->getCurrentLayout()->recalculateMonitor(ID);
@@ -414,9 +410,7 @@ void CMonitor::setupDefaultWS(const SMonitorRule& monitorRule) {
         if (newDefaultWorkspaceName == "")
             newDefaultWorkspaceName = std::to_string(WORKSPACEID);
 
-        PNEWWORKSPACE = g_pCompositor->m_vWorkspaces.emplace_back(std::make_unique<CWorkspace>(ID, newDefaultWorkspaceName)).get();
-
-        PNEWWORKSPACE->m_iID = WORKSPACEID;
+        PNEWWORKSPACE = g_pCompositor->m_vWorkspaces.emplace_back(std::make_unique<CWorkspace>(WORKSPACEID, ID, newDefaultWorkspaceName)).get();
     }
 
     activeWorkspace = PNEWWORKSPACE->m_iID;
@@ -593,6 +587,7 @@ void CMonitor::changeWorkspace(CWorkspace* const pWorkspace, bool internal, bool
         g_pLayoutManager->getCurrentLayout()->recalculateMonitor(ID);
 
         g_pEventManager->postEvent(SHyprIPCEvent{"workspace", pWorkspace->m_szName});
+        g_pEventManager->postEvent(SHyprIPCEvent{"workspacev2", std::format("{},{}", pWorkspace->m_iID, pWorkspace->m_szName)});
         EMIT_HOOK_EVENT("workspace", pWorkspace);
     }
 

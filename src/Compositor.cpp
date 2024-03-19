@@ -1,6 +1,7 @@
 #include "Compositor.hpp"
 #include "helpers/Splashes.hpp"
 #include "config/ConfigValue.hpp"
+#include "managers/CursorManager.hpp"
 #include <random>
 #include <unordered_set>
 #include "debug/HyprCtl.hpp"
@@ -126,13 +127,26 @@ void CCompositor::initServer() {
         throwError("wlr_backend_autocreate() failed!");
     }
 
-    m_iDRMFD = wlr_backend_get_drm_fd(m_sWLRBackend);
-    if (m_iDRMFD < 0) {
-        Debug::log(CRIT, "Couldn't query the DRM FD!");
-        throwError("wlr_backend_get_drm_fd() failed!");
-    }
+    bool isHeadlessOnly = true;
+    wlr_multi_for_each_backend(
+        m_sWLRBackend,
+        [](wlr_backend* backend, void* isHeadlessOnly) {
+            if (!wlr_backend_is_headless(backend))
+                *(bool*)isHeadlessOnly = false;
+        },
+        &isHeadlessOnly);
 
-    m_sWLRRenderer = wlr_gles2_renderer_create_with_drm_fd(m_iDRMFD);
+    if (isHeadlessOnly) {
+        m_sWLRRenderer = wlr_renderer_autocreate(m_sWLRBackend);
+    } else {
+        m_iDRMFD = wlr_backend_get_drm_fd(m_sWLRBackend);
+        if (m_iDRMFD < 0) {
+            Debug::log(CRIT, "Couldn't query the DRM FD!");
+            throwError("wlr_backend_get_drm_fd() failed!");
+        }
+
+        m_sWLRRenderer = wlr_gles2_renderer_create_with_drm_fd(m_iDRMFD);
+    }
 
     if (!m_sWLRRenderer) {
         Debug::log(CRIT, "m_sWLRRenderer was NULL! This usually means wlroots could not find a GPU or enountered some issues.");
@@ -181,18 +195,6 @@ void CCompositor::initServer() {
 
     m_sWLRCursor = wlr_cursor_create();
     wlr_cursor_attach_output_layout(m_sWLRCursor, m_sWLROutputLayout);
-
-    if (const auto XCURSORENV = getenv("XCURSOR_SIZE"); !XCURSORENV || std::string(XCURSORENV).empty())
-        setenv("XCURSOR_SIZE", "24", true);
-
-    const auto XCURSORENV = getenv("XCURSOR_SIZE");
-    int        cursorSize = 24;
-    try {
-        cursorSize = std::stoi(XCURSORENV);
-    } catch (std::exception& e) { Debug::log(ERR, "XCURSOR_SIZE invalid in check #2? ({})", XCURSORENV); }
-
-    m_sWLRXCursorMgr = wlr_xcursor_manager_create(nullptr, cursorSize);
-    wlr_xcursor_manager_load(m_sWLRXCursorMgr, 1);
 
     m_sSeat.seat = wlr_seat_create(m_sWLDisplay, "seat0");
 
@@ -422,6 +424,7 @@ void CCompositor::cleanup() {
     wl_display_destroy_clients(g_pCompositor->m_sWLDisplay);
 
     g_pDecorationPositioner.reset();
+    g_pCursorManager.reset();
     g_pPluginSystem.reset();
     g_pHyprNotificationOverlay.reset();
     g_pDebugOverlay.reset();
@@ -511,6 +514,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
 
             Debug::log(LOG, "Creating the DecorationPositioner!");
             g_pDecorationPositioner = std::make_unique<CDecorationPositioner>();
+
+            Debug::log(LOG, "Creating the CursorManager!");
+            g_pCursorManager = std::make_unique<CCursorManager>();
         } break;
         default: UNREACHABLE();
     }
@@ -936,6 +942,9 @@ void CCompositor::focusWindow(CWindow* pWindow, wlr_surface* pSurface) {
         Debug::log(LOG, "Refusing a keyboard focus to a window because of an exclusive ls");
         return;
     }
+
+    if (pWindow && pWindow->m_bIsX11 && pWindow->m_iX11Type == 2 && !wlr_xwayland_or_surface_wants_focus(pWindow->m_uSurface.xwayland))
+        return;
 
     g_pLayoutManager->getCurrentLayout()->bringWindowToTop(pWindow);
 
@@ -1437,11 +1446,15 @@ void CCompositor::cleanupFadingOut(const int& monid) {
         bool valid = windowExists(w);
 
         if (!valid || !w->m_bFadingOut || w->m_fAlpha.value() == 0.f) {
-            if (valid && !w->m_bReadyToDelete)
-                continue;
+            if (valid) {
+                w->m_bFadingOut = false;
 
-            w->m_bFadingOut = false;
-            removeWindowFromVectorSafe(w);
+                if (!w->m_bReadyToDelete)
+                    continue;
+
+                removeWindowFromVectorSafe(w);
+            }
+
             std::erase(m_vWindowsFadingOut, w);
 
             Debug::log(LOG, "Cleanup: destroyed a window");
@@ -2059,8 +2072,10 @@ void CCompositor::swapActiveWorkspaces(CMonitor* pMonitorA, CMonitor* pMonitorB)
 
     // event
     g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspace", PWORKSPACEA->m_szName + "," + pMonitorB->szName});
+    g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspacev2", std::format("{},{},{}", PWORKSPACEA->m_iID, PWORKSPACEA->m_szName, pMonitorB->szName)});
     EMIT_HOOK_EVENT("moveWorkspace", (std::vector<void*>{PWORKSPACEA, pMonitorB}));
     g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspace", PWORKSPACEB->m_szName + "," + pMonitorA->szName});
+    g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspacev2", std::format("{},{},{}", PWORKSPACEB->m_iID, PWORKSPACEB->m_szName, pMonitorA->szName)});
     EMIT_HOOK_EVENT("moveWorkspace", (std::vector<void*>{PWORKSPACEB, pMonitorA}));
 }
 
@@ -2241,6 +2256,7 @@ void CCompositor::moveWorkspaceToMonitor(CWorkspace* pWorkspace, CMonitor* pMoni
 
     // event
     g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspace", pWorkspace->m_szName + "," + pMonitor->szName});
+    g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspacev2", std::format("{},{},{}", pWorkspace->m_iID, pWorkspace->m_szName, pMonitor->szName)});
     EMIT_HOOK_EVENT("moveWorkspace", (std::vector<void*>{pWorkspace, pMonitor}));
 }
 
@@ -2295,6 +2311,11 @@ void CCompositor::setWindowFullscreen(CWindow* pWindow, bool on, eFullscreenMode
 
     if (pWindow->m_bPinned) {
         Debug::log(LOG, "Pinned windows cannot be fullscreen'd");
+        return;
+    }
+
+    if (pWindow->m_bIsFullscreen == on) {
+        Debug::log(LOG, "Window is already in the required fullscreen state");
         return;
     }
 
@@ -2577,10 +2598,7 @@ CWorkspace* CCompositor::createNewWorkspace(const int& id, const int& monid, con
 
     const bool SPECIAL = id >= SPECIAL_WORKSPACE_START && id <= -2;
 
-    const auto PWORKSPACE = m_vWorkspaces.emplace_back(std::make_unique<CWorkspace>(monID, NAME, SPECIAL)).get();
-
-    PWORKSPACE->m_iID        = id;
-    PWORKSPACE->m_iMonitorID = monID;
+    const auto PWORKSPACE = m_vWorkspaces.emplace_back(std::make_unique<CWorkspace>(id, monID, NAME, SPECIAL)).get();
 
     PWORKSPACE->m_fAlpha.setValueAndWarp(0);
 

@@ -547,7 +547,7 @@ void CHyprOpenGLImpl::applyScreenShader(const std::string& path) {
 
     std::string fragmentShader((std::istreambuf_iterator<char>(infile)), (std::istreambuf_iterator<char>()));
 
-    m_sFinalScreenShader.program = createProgram(TEXVERTSRC, fragmentShader, true);
+    m_sFinalScreenShader.program = createProgram(fragmentShader.starts_with("#version 320 es") ? TEXVERTSRC320 : TEXVERTSRC, fragmentShader, true);
 
     if (!m_sFinalScreenShader.program) {
         g_pConfigManager->addParseError("Screen shader parser: Screen shader parse failed");
@@ -558,6 +558,9 @@ void CHyprOpenGLImpl::applyScreenShader(const std::string& path) {
     m_sFinalScreenShader.tex       = glGetUniformLocation(m_sFinalScreenShader.program, "tex");
     m_sFinalScreenShader.time      = glGetUniformLocation(m_sFinalScreenShader.program, "time");
     m_sFinalScreenShader.wl_output = glGetUniformLocation(m_sFinalScreenShader.program, "wl_output");
+    m_sFinalScreenShader.fullSize  = glGetUniformLocation(m_sFinalScreenShader.program, "screen_size");
+    if (m_sFinalScreenShader.fullSize == -1)
+        m_sFinalScreenShader.fullSize = glGetUniformLocation(m_sFinalScreenShader.program, "screenSize");
     if (m_sFinalScreenShader.time != -1 && *PDT != 0 && !g_pHyprRenderer->m_bCrashingInProgress) {
         // The screen shader uses the "time" uniform
         // Since the screen shader could change every frame, damage tracking *needs* to be disabled
@@ -852,6 +855,8 @@ void CHyprOpenGLImpl::renderTextureInternalWithDamage(const CTexture& tex, CBox*
 
     if (usingFinalShader && shader->wl_output != -1)
         glUniform1i(shader->wl_output, m_RenderData.pMonitor->ID);
+    if (usingFinalShader && shader->fullSize != -1)
+        glUniform2f(shader->fullSize, m_RenderData.pMonitor->vecPixelSize.x, m_RenderData.pMonitor->vecPixelSize.y);
 
     if (CRASHING) {
         glUniform1f(shader->distort, g_pHyprRenderer->m_fCrashingDistort);
@@ -2281,10 +2286,10 @@ inline const SGLPixelFormat GLES2_FORMATS[] = {
 };
 
 uint32_t CHyprOpenGLImpl::getPreferredReadFormat(CMonitor* pMonitor) {
-    GLint glf = -1, glt = -1, as = -1;
-    glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &glf);
+    GLint glf = -1, glt = -1, as = 0;
+    /*glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &glf);
     glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, &glt);
-    glGetIntegerv(GL_ALPHA_BITS, &as);
+    glGetIntegerv(GL_ALPHA_BITS, &as);*/
 
     if (glf == 0 || glt == 0) {
         glf = drmFormatToGL(pMonitor->drmFormat);

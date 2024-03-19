@@ -217,7 +217,27 @@ void IHyprLayout::onBeginDragWindow() {
     m_vLastDragXY          = m_vBeginDragXY;
 
     // get the grab corner
-    if (m_vBeginDragXY.x < m_vBeginDragPositionXY.x + m_vBeginDragSizeXY.x / 2.0) {
+    static auto RESIZECORNER = CConfigValue<Hyprlang::INT>("general:resize_corner");
+    if (*RESIZECORNER != 0 && *RESIZECORNER <= 4 && DRAGGINGWINDOW->m_bIsFloating) {
+        switch (*RESIZECORNER) {
+            case 1:
+                m_eGrabbedCorner = CORNER_TOPLEFT;
+                g_pInputManager->setCursorImageUntilUnset("nw-resize");
+                break;
+            case 2:
+                m_eGrabbedCorner = CORNER_TOPRIGHT;
+                g_pInputManager->setCursorImageUntilUnset("ne-resize");
+                break;
+            case 3:
+                m_eGrabbedCorner = CORNER_BOTTOMRIGHT;
+                g_pInputManager->setCursorImageUntilUnset("se-resize");
+                break;
+            case 4:
+                m_eGrabbedCorner = CORNER_BOTTOMLEFT;
+                g_pInputManager->setCursorImageUntilUnset("sw-resize");
+                break;
+        }
+    } else if (m_vBeginDragXY.x < m_vBeginDragPositionXY.x + m_vBeginDragSizeXY.x / 2.0) {
         if (m_vBeginDragXY.y < m_vBeginDragPositionXY.y + m_vBeginDragSizeXY.y / 2.0) {
             m_eGrabbedCorner = CORNER_TOPLEFT;
             g_pInputManager->setCursorImageUntilUnset("nw-resize");
@@ -358,8 +378,8 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
     } else if (g_pInputManager->dragMode == MBIND_RESIZE || g_pInputManager->dragMode == MBIND_RESIZE_FORCE_RATIO || g_pInputManager->dragMode == MBIND_RESIZE_BLOCK_RATIO) {
         if (DRAGGINGWINDOW->m_bIsFloating) {
 
-            Vector2D MINSIZE = g_pXWaylandManager->getMinSizeForWindow(DRAGGINGWINDOW).clamp({20, 20});
-            Vector2D MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW);
+            Vector2D MINSIZE = g_pXWaylandManager->getMinSizeForWindow(DRAGGINGWINDOW).clamp(DRAGGINGWINDOW->m_sAdditionalConfigData.minSize.toUnderlying());
+            Vector2D MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW).clamp({}, DRAGGINGWINDOW->m_sAdditionalConfigData.maxSize.toUnderlying());
 
             Vector2D newSize = m_vBeginDragSizeXY;
             Vector2D newPos  = m_vBeginDragPositionXY;
@@ -461,6 +481,11 @@ void IHyprLayout::changeWindowFloatingMode(CWindow* pWindow) {
         pWindow->moveToWorkspace(PNEWMON->specialWorkspaceID != 0 ? PNEWMON->specialWorkspaceID : PNEWMON->activeWorkspace);
         pWindow->updateGroupOutputs();
 
+        const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(PNEWMON->specialWorkspaceID != 0 ? PNEWMON->specialWorkspaceID : PNEWMON->activeWorkspace);
+
+        if (PWORKSPACE->m_bHasFullscreenWindow)
+            g_pCompositor->setWindowFullscreen(g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID), false);
+
         // save real pos cuz the func applies the default 5,5 mid
         const auto PSAVEDPOS  = pWindow->m_vRealPosition.goal();
         const auto PSAVEDSIZE = pWindow->m_vRealSize.goal();
@@ -526,6 +551,8 @@ void IHyprLayout::moveActiveWindow(const Vector2D& delta, CWindow* pWindow) {
         Debug::log(LOG, "Dwindle cannot move a tiled window in moveActiveWindow!");
         return;
     }
+
+    PWINDOW->setAnimationsToMove();
 
     PWINDOW->m_vRealPosition = PWINDOW->m_vRealPosition.goal() + delta;
 

@@ -142,26 +142,28 @@ struct SWindowSpecialRenderData {
 };
 
 struct SWindowAdditionalConfigData {
-    std::string                 animationStyle        = std::string("");
-    CWindowOverridableVar<int>  rounding              = -1; // -1 means no
-    CWindowOverridableVar<bool> forceNoBlur           = false;
-    CWindowOverridableVar<bool> forceOpaque           = false;
-    CWindowOverridableVar<bool> forceOpaqueOverridden = false; // if true, a rule will not change the forceOpaque state. This is for the force opaque dispatcher.
-    CWindowOverridableVar<bool> forceAllowsInput      = false;
-    CWindowOverridableVar<bool> forceNoAnims          = false;
-    CWindowOverridableVar<bool> forceNoBorder         = false;
-    CWindowOverridableVar<bool> forceNoShadow         = false;
-    CWindowOverridableVar<bool> forceNoDim            = false;
-    CWindowOverridableVar<bool> noFocus               = false;
-    CWindowOverridableVar<bool> windowDanceCompat     = false;
-    CWindowOverridableVar<bool> noMaxSize             = false;
-    CWindowOverridableVar<bool> dimAround             = false;
-    CWindowOverridableVar<bool> forceRGBX             = false;
-    CWindowOverridableVar<bool> keepAspectRatio       = false;
-    CWindowOverridableVar<int>  xray                  = -1; // -1 means unset, takes precedence over the renderdata one
-    CWindowOverridableVar<int>  borderSize            = -1; // -1 means unset, takes precedence over the renderdata one
-    CWindowOverridableVar<bool> forceTearing          = false;
-    CWindowOverridableVar<bool> nearestNeighbor       = false;
+    std::string                     animationStyle        = std::string("");
+    CWindowOverridableVar<int>      rounding              = -1; // -1 means no
+    CWindowOverridableVar<bool>     forceNoBlur           = false;
+    CWindowOverridableVar<bool>     forceOpaque           = false;
+    CWindowOverridableVar<bool>     forceOpaqueOverridden = false; // if true, a rule will not change the forceOpaque state. This is for the force opaque dispatcher.
+    CWindowOverridableVar<bool>     forceAllowsInput      = false;
+    CWindowOverridableVar<bool>     forceNoAnims          = false;
+    CWindowOverridableVar<bool>     forceNoBorder         = false;
+    CWindowOverridableVar<bool>     forceNoShadow         = false;
+    CWindowOverridableVar<bool>     forceNoDim            = false;
+    CWindowOverridableVar<bool>     noFocus               = false;
+    CWindowOverridableVar<bool>     windowDanceCompat     = false;
+    CWindowOverridableVar<bool>     noMaxSize             = false;
+    CWindowOverridableVar<Vector2D> maxSize               = Vector2D(std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+    CWindowOverridableVar<Vector2D> minSize               = Vector2D(20, 20);
+    CWindowOverridableVar<bool>     dimAround             = false;
+    CWindowOverridableVar<bool>     forceRGBX             = false;
+    CWindowOverridableVar<bool>     keepAspectRatio       = false;
+    CWindowOverridableVar<int>      xray                  = -1; // -1 means unset, takes precedence over the renderdata one
+    CWindowOverridableVar<int>      borderSize            = -1; // -1 means unset, takes precedence over the renderdata one
+    CWindowOverridableVar<bool>     forceTearing          = false;
+    CWindowOverridableVar<bool>     nearestNeighbor       = false;
 };
 
 struct SWindowRule {
@@ -294,6 +296,7 @@ class CWindow {
     Vector2D                 m_vOriginalClosedPos;  // these will be used for calculations later on in
     Vector2D                 m_vOriginalClosedSize; // drawing the closing animations
     SWindowDecorationExtents m_eOriginalClosedExtents;
+    bool                     m_bAnimatingIn = false;
 
     // For pinned (sticky) windows
     bool m_bPinned = false;
@@ -393,6 +396,7 @@ class CWindow {
     bool                     canBeTorn();
     bool                     shouldSendFullscreenState();
     void                     setSuspended(bool suspend);
+    bool                     visibleOnMonitor(CMonitor* pMonitor);
 
     int                      getRealBorderSize();
     void                     updateSpecialRenderData();
@@ -415,6 +419,7 @@ class CWindow {
     void                     insertWindowToGroup(CWindow* pWindow);
     void                     updateGroupOutputs();
     void                     switchWithWindowInGroup(CWindow* pWindow);
+    void                     setAnimationsToMove();
 
   private:
     // For hidden windows and stuff

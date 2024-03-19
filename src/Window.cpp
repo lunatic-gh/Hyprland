@@ -194,7 +194,14 @@ void CWindow::updateWindowDecos() {
 
     m_vDecosToRemove.clear();
 
+    // make a copy because updateWindow can remove decos.
+    std::vector<IHyprWindowDecoration*> decos;
+
     for (auto& wd : m_dWindowDecorations) {
+        decos.push_back(wd.get());
+    }
+
+    for (auto& wd : decos) {
         wd->updateWindow(this);
     }
 }
@@ -382,10 +389,13 @@ void CWindow::moveToWorkspace(int workspaceID) {
 
     const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(m_iWorkspaceID);
 
+    setAnimationsToMove();
+
     updateSpecialRenderData();
 
     if (PWORKSPACE) {
         g_pEventManager->postEvent(SHyprIPCEvent{"movewindow", std::format("{:x},{}", (uintptr_t)this, PWORKSPACE->m_szName)});
+        g_pEventManager->postEvent(SHyprIPCEvent{"movewindowv2", std::format("{:x},{},{}", (uintptr_t)this, PWORKSPACE->m_iID, PWORKSPACE->m_szName)});
         EMIT_HOOK_EVENT("moveWindow", (std::vector<void*>{this, PWORKSPACE}));
     }
 
@@ -516,6 +526,7 @@ void CWindow::onMap() {
                                           "CWindow");
 
     m_vReportedSize = m_vPendingReportedSize;
+    m_bAnimatingIn  = true;
 
     for (const auto& ctrl : g_pHyprRenderer->m_vTearingControllers) {
         if (ctrl->pWlrHint->surface != m_pWLSurface.wlr())
@@ -687,6 +698,38 @@ void CWindow::applyDynamicRule(const SWindowRule& r) {
             m_eIdleInhibitMode = IDLEINHIBIT_FULLSCREEN;
         else
             Debug::log(ERR, "Rule idleinhibit: unknown mode {}", IDLERULE);
+    } else if (r.szRule.starts_with("maxsize")) {
+        try {
+            if (!m_bIsFloating)
+                return;
+            const auto VEC = configStringToVector2D(r.szRule.substr(8));
+            if (VEC.x < 1 || VEC.y < 1) {
+                Debug::log(ERR, "Invalid size for maxsize");
+                return;
+            }
+
+            m_sAdditionalConfigData.maxSize = VEC;
+            m_vRealSize                     = Vector2D(std::min((double)m_sAdditionalConfigData.maxSize.toUnderlying().x, m_vRealSize.goal().x),
+                                                       std::min((double)m_sAdditionalConfigData.maxSize.toUnderlying().y, m_vRealSize.goal().y));
+            g_pXWaylandManager->setWindowSize(this, m_vRealSize.goal());
+            setHidden(false);
+        } catch (std::exception& e) { Debug::log(ERR, "maxsize rule \"{}\" failed with: {}", r.szRule, e.what()); }
+    } else if (r.szRule.starts_with("minsize")) {
+        try {
+            if (!m_bIsFloating)
+                return;
+            const auto VEC = configStringToVector2D(r.szRule.substr(8));
+            if (VEC.x < 1 || VEC.y < 1) {
+                Debug::log(ERR, "Invalid size for minsize");
+                return;
+            }
+
+            m_sAdditionalConfigData.minSize = VEC;
+            m_vRealSize                     = Vector2D(std::max((double)m_sAdditionalConfigData.minSize.toUnderlying().x, m_vRealSize.goal().x),
+                                                       std::max((double)m_sAdditionalConfigData.minSize.toUnderlying().y, m_vRealSize.goal().y));
+            g_pXWaylandManager->setWindowSize(this, m_vRealSize.goal());
+            setHidden(false);
+        } catch (std::exception& e) { Debug::log(ERR, "minsize rule \"{}\" failed with: {}", r.szRule, e.what()); }
     }
 }
 
@@ -701,6 +744,8 @@ void CWindow::updateDynamicRules() {
     m_sAdditionalConfigData.forceNoDim       = false;
     if (!m_sAdditionalConfigData.forceOpaqueOverridden)
         m_sAdditionalConfigData.forceOpaque = false;
+    m_sAdditionalConfigData.maxSize         = Vector2D(std::numeric_limits<double>::max(), std::numeric_limits<double>::max());
+    m_sAdditionalConfigData.minSize         = Vector2D(20, 20);
     m_sAdditionalConfigData.forceNoAnims    = false;
     m_sAdditionalConfigData.animationStyle  = std::string("");
     m_sAdditionalConfigData.rounding        = -1;
@@ -1015,6 +1060,9 @@ bool CWindow::opaque() {
     if (m_fAlpha.value() != 1.f || m_fActiveInactiveAlpha.value() != 1.f)
         return false;
 
+    if (m_vRealSize.goal().floor() != m_vReportedSize)
+        return false;
+
     const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(m_iWorkspaceID);
 
     if (m_pWLSurface.small() && !m_pWLSurface.m_bFillIgnoreSmall)
@@ -1094,4 +1142,17 @@ void CWindow::setSuspended(bool suspend) {
 
     wlr_xdg_toplevel_set_suspended(m_uSurface.xdg->toplevel, suspend);
     m_bSuspended = suspend;
+}
+
+bool CWindow::visibleOnMonitor(CMonitor* pMonitor) {
+    CBox wbox = {m_vRealPosition.value(), m_vRealSize.value()};
+
+    return wlr_output_layout_intersects(g_pCompositor->m_sWLROutputLayout, pMonitor->output, wbox.pWlr());
+}
+
+void CWindow::setAnimationsToMove() {
+    auto* const PANIMCFG = g_pConfigManager->getAnimationPropertyConfig("windowsMove");
+    m_vRealPosition.setConfig(PANIMCFG);
+    m_vRealSize.setConfig(PANIMCFG);
+    m_bAnimatingIn = false;
 }
