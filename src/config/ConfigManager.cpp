@@ -349,6 +349,7 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("misc:background_color", Hyprlang::INT{0xff111111});
     m_pConfig->addConfigValue("misc:new_window_takes_over_fullscreen", Hyprlang::INT{0});
     m_pConfig->addConfigValue("misc:enable_hyprcursor", Hyprlang::INT{1});
+    m_pConfig->addConfigValue("misc:hide_cursor_on_key_press", Hyprlang::INT{0});
 
     m_pConfig->addConfigValue("group:insert_after_current", Hyprlang::INT{1});
     m_pConfig->addConfigValue("group:focus_removed_window", Hyprlang::INT{1});
@@ -372,6 +373,7 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("debug:damage_tracking", {(Hyprlang::INT)DAMAGE_TRACKING_FULL});
     m_pConfig->addConfigValue("debug:manual_crash", Hyprlang::INT{0});
     m_pConfig->addConfigValue("debug:suppress_errors", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("debug:error_limit", Hyprlang::INT{5});
     m_pConfig->addConfigValue("debug:watchdog_timeout", Hyprlang::INT{5});
     m_pConfig->addConfigValue("debug:disable_scale_checks", Hyprlang::INT{0});
 
@@ -438,6 +440,7 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("input:follow_mouse", Hyprlang::INT{1});
     m_pConfig->addConfigValue("input:mouse_refocus", Hyprlang::INT{1});
     m_pConfig->addConfigValue("input:special_fallthrough", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("input:off_window_axis_events", Hyprlang::INT{1});
     m_pConfig->addConfigValue("input:sensitivity", {0.f});
     m_pConfig->addConfigValue("input:accel_profile", {STRVAL_EMPTY});
     m_pConfig->addConfigValue("input:kb_file", {STRVAL_EMPTY});
@@ -476,6 +479,9 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("input:tablet:region_position", Hyprlang::VEC2{0, 0});
     m_pConfig->addConfigValue("input:tablet:region_size", Hyprlang::VEC2{0, 0});
     m_pConfig->addConfigValue("input:tablet:relative_input", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("input:tablet:left_handed", Hyprlang::INT{0});
+    m_pConfig->addConfigValue("input:tablet:active_area_position", Hyprlang::VEC2{0, 0});
+    m_pConfig->addConfigValue("input:tablet:active_area_size", Hyprlang::VEC2{0, 0});
 
     m_pConfig->addConfigValue("binds:pass_mouse_when_bound", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:scroll_event_delay", Hyprlang::INT{300});
@@ -485,6 +491,7 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("binds:focus_preferred_method", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:ignore_group_lock", Hyprlang::INT{0});
     m_pConfig->addConfigValue("binds:movefocus_cycles_fullscreen", Hyprlang::INT{1});
+    m_pConfig->addConfigValue("binds:disable_keybind_grabbing", Hyprlang::INT{0});
 
     m_pConfig->addConfigValue("gestures:workspace_swipe", Hyprlang::INT{0});
     m_pConfig->addConfigValue("gestures:workspace_swipe_fingers", Hyprlang::INT{3});
@@ -496,7 +503,6 @@ CConfigManager::CConfigManager() {
     m_pConfig->addConfigValue("gestures:workspace_swipe_direction_lock", Hyprlang::INT{1});
     m_pConfig->addConfigValue("gestures:workspace_swipe_direction_lock_threshold", Hyprlang::INT{10});
     m_pConfig->addConfigValue("gestures:workspace_swipe_forever", Hyprlang::INT{0});
-    m_pConfig->addConfigValue("gestures:workspace_swipe_numbered", Hyprlang::INT{0});
     m_pConfig->addConfigValue("gestures:workspace_swipe_use_r", Hyprlang::INT{0});
     m_pConfig->addConfigValue("gestures:workspace_swipe_touch", Hyprlang::INT{0});
 
@@ -552,10 +558,12 @@ CConfigManager::CConfigManager() {
     m_pConfig->addSpecialConfigValue("device", "scroll_points", {STRVAL_EMPTY});
     m_pConfig->addSpecialConfigValue("device", "transform", Hyprlang::INT{0});
     m_pConfig->addSpecialConfigValue("device", "output", {STRVAL_EMPTY});
-    m_pConfig->addSpecialConfigValue("device", "enabled", Hyprlang::INT{1});             // only for mice, touchpads, and touchdevices
-    m_pConfig->addSpecialConfigValue("device", "region_position", Hyprlang::VEC2{0, 0}); // only for tablets
-    m_pConfig->addSpecialConfigValue("device", "region_size", Hyprlang::VEC2{0, 0});     // only for tablets
-    m_pConfig->addSpecialConfigValue("device", "relative_input", Hyprlang::INT{0});      // only for tablets
+    m_pConfig->addSpecialConfigValue("device", "enabled", Hyprlang::INT{1});                  // only for mice, touchpads, and touchdevices
+    m_pConfig->addSpecialConfigValue("device", "region_position", Hyprlang::VEC2{0, 0});      // only for tablets
+    m_pConfig->addSpecialConfigValue("device", "region_size", Hyprlang::VEC2{0, 0});          // only for tablets
+    m_pConfig->addSpecialConfigValue("device", "relative_input", Hyprlang::INT{0});           // only for tablets
+    m_pConfig->addSpecialConfigValue("device", "active_area_position", Hyprlang::VEC2{0, 0}); // only for tablets
+    m_pConfig->addSpecialConfigValue("device", "active_area_size", Hyprlang::VEC2{0, 0});     // only for tablets
 
     // keywords
     m_pConfig->registerHandler(&::handleRawExec, "exec", {false});
@@ -580,10 +588,12 @@ CConfigManager::CConfigManager() {
 
     m_pConfig->commence();
 
-    Debug::log(LOG, "NOTE: further logs to stdout / logfile are disabled by default. Use debug:disable_logs and debug:enable_stdout_logs to override this.");
-
     setDefaultAnimationVars();
     resetHLConfig();
+
+    Debug::log(LOG,
+               "!!!!HEY YOU, YES YOU!!!!: further logs to stdout / logfile are disabled by default. BEFORE SENDING THIS LOG, ENABLE THEM. Use debug:disable_logs = false to do so: "
+               "https://wiki.hyprland.org/Configuring/Variables/#debug");
 
     Debug::disableLogs = reinterpret_cast<int64_t* const*>(m_pConfig->getConfigValuePtr("debug:disable_logs")->getDataStaticPtr());
     Debug::disableTime = reinterpret_cast<int64_t* const*>(m_pConfig->getConfigValuePtr("debug:disable_time")->getDataStaticPtr());
@@ -606,6 +616,10 @@ std::string CConfigManager::getMainConfigPath() {
         return g_pCompositor->explicitConfigPath;
 
     return getConfigDir() + "/hypr/" + (ISDEBUG ? "hyprlandd.conf" : "hyprland.conf");
+}
+
+std::string CConfigManager::getErrors() {
+    return m_szConfigErrors;
 }
 
 void CConfigManager::reload() {
@@ -632,6 +646,10 @@ void CConfigManager::setDefaultAnimationVars() {
         INITANIMCFG("windowsOut");
         INITANIMCFG("windowsMove");
 
+        // layers
+        INITANIMCFG("layersIn");
+        INITANIMCFG("layersOut");
+
         // fade
         INITANIMCFG("fadeIn");
         INITANIMCFG("fadeOut");
@@ -655,6 +673,9 @@ void CConfigManager::setDefaultAnimationVars() {
     CREATEANIMCFG("borderangle", "global");
     CREATEANIMCFG("workspaces", "global");
 
+    CREATEANIMCFG("layersIn", "layers");
+    CREATEANIMCFG("layersOut", "layers");
+
     CREATEANIMCFG("windowsIn", "windows");
     CREATEANIMCFG("windowsOut", "windows");
     CREATEANIMCFG("windowsMove", "windows");
@@ -665,6 +686,8 @@ void CConfigManager::setDefaultAnimationVars() {
     CREATEANIMCFG("fadeShadow", "fade");
     CREATEANIMCFG("fadeDim", "fade");
     CREATEANIMCFG("fadeLayers", "fade");
+    CREATEANIMCFG("fadeLayersIn", "fadeLayers");
+    CREATEANIMCFG("fadeLayersOut", "fadeLayers");
 
     CREATEANIMCFG("specialWorkspace", "workspaces");
 }
@@ -739,6 +762,12 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
         g_pHyprOpenGL->m_bReloadScreenShader = true;
 
     // parseError will be displayed next frame
+
+    if (result.error)
+        m_szConfigErrors = result.getError();
+    else
+        m_szConfigErrors = "";
+
     if (result.error && !std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("debug:suppress_errors")))
         g_pHyprError->queueCreate(result.getError(), CColor(1.0, 50.0 / 255.0, 50.0 / 255.0, 1.0));
     else if (std::any_cast<Hyprlang::INT>(m_pConfig->getConfigValue("autogenerated")) == 1)
@@ -762,12 +791,11 @@ void CConfigManager::postConfigReload(const Hyprlang::CParseResult& result) {
         refreshGroupBarGradients();
 
     // Updates dynamic window and workspace rules
-    for (auto& w : g_pCompositor->m_vWindows) {
-        if (!w->m_bIsMapped)
+    for (auto& w : g_pCompositor->m_vWorkspaces) {
+        if (w->inert())
             continue;
-
-        w->updateDynamicRules();
-        w->updateSpecialRenderData();
+        g_pCompositor->updateWorkspaceWindows(w->m_iID);
+        g_pCompositor->updateWorkspaceSpecialRenderData(w->m_iID);
     }
 
     // Update window border colors
@@ -936,17 +964,43 @@ SMonitorRule CConfigManager::getMonitorRuleFor(const CMonitor& PMONITOR) {
     return SMonitorRule{.name = "", .resolution = Vector2D(0, 0), .offset = Vector2D(-INT32_MAX, -INT32_MAX), .scale = -1}; // 0, 0 is preferred and -1, -1 is auto
 }
 
-SWorkspaceRule CConfigManager::getWorkspaceRuleFor(CWorkspace* pWorkspace) {
-    const auto WORKSPACEIDSTR = std::to_string(pWorkspace->m_iID);
-    const auto IT             = std::find_if(m_dWorkspaceRules.begin(), m_dWorkspaceRules.end(), [&](const auto& other) {
-        return other.workspaceName == pWorkspace->m_szName /* name matches */
-            || (pWorkspace->m_bIsSpecialWorkspace && other.workspaceName.starts_with("special:") &&
-                other.workspaceName.substr(8) == pWorkspace->m_szName)           /* special and special:name */
-            || (pWorkspace->m_iID > 0 && WORKSPACEIDSTR == other.workspaceName); /* id matches and workspace is numerical */
-    });
-    if (IT == m_dWorkspaceRules.end())
-        return SWorkspaceRule{};
-    return *IT;
+SWorkspaceRule CConfigManager::getWorkspaceRuleFor(PHLWORKSPACE pWorkspace) {
+    SWorkspaceRule mergedRule{};
+    for (auto& rule : m_dWorkspaceRules) {
+        if (!pWorkspace->matchesStaticSelector(rule.workspaceString))
+            continue;
+
+        if (rule.isDefault)
+            mergedRule.isDefault = true;
+        if (rule.isPersistent)
+            mergedRule.isPersistent = true;
+        if (rule.gapsIn.has_value())
+            mergedRule.gapsIn = rule.gapsIn;
+        if (rule.gapsOut.has_value())
+            mergedRule.gapsOut = rule.gapsOut;
+        if (rule.borderSize.has_value())
+            mergedRule.borderSize = rule.borderSize;
+        if (rule.border.has_value())
+            mergedRule.border = rule.border;
+        if (rule.rounding.has_value())
+            mergedRule.rounding = rule.rounding;
+        if (rule.decorate.has_value())
+            mergedRule.decorate = rule.decorate;
+        if (rule.shadow.has_value())
+            mergedRule.shadow = rule.shadow;
+        if (rule.onCreatedEmptyRunCmd.has_value())
+            mergedRule.onCreatedEmptyRunCmd = rule.onCreatedEmptyRunCmd;
+        if (rule.defaultName.has_value())
+            mergedRule.defaultName = rule.defaultName;
+
+        if (!rule.layoutopts.empty()) {
+            for (const auto& layoutopt : rule.layoutopts) {
+                mergedRule.layoutopts[layoutopt.first] = layoutopt.second;
+            }
+        }
+    }
+
+    return mergedRule;
 }
 
 std::vector<SWindowRule> CConfigManager::getMatchingRules(CWindow* pWindow, bool dynamic, bool shadowExec) {
@@ -1039,13 +1093,14 @@ std::vector<SWindowRule> CConfigManager::getMatchingRules(CWindow* pWindow, bool
                         continue;
                 }
 
-                if (rule.iOnWorkspace != -1) {
-                    if (rule.iOnWorkspace != g_pCompositor->getWindowsOnWorkspace(pWindow->m_iWorkspaceID))
+                if (!rule.szOnWorkspace.empty()) {
+                    const auto PWORKSPACE = pWindow->m_pWorkspace;
+                    if (!PWORKSPACE || !PWORKSPACE->matchesStaticSelector(rule.szOnWorkspace))
                         continue;
                 }
 
                 if (!rule.szWorkspace.empty()) {
-                    const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(pWindow->m_iWorkspaceID);
+                    const auto PWORKSPACE = pWindow->m_pWorkspace;
 
                     if (!PWORKSPACE)
                         continue;
@@ -1270,7 +1325,7 @@ void CConfigManager::ensureVRR(CMonitor* pMonitor) {
             /* fullscreen */
             m->vrrActive = true;
 
-            const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(m->activeWorkspace);
+            const auto PWORKSPACE = m->activeWorkspace;
 
             if (!PWORKSPACE)
                 return; // ???
@@ -1327,9 +1382,8 @@ std::string CConfigManager::getBoundMonitorStringForWS(const std::string& wsname
     for (auto& wr : m_dWorkspaceRules) {
         const auto WSNAME = wr.workspaceName.starts_with("name:") ? wr.workspaceName.substr(5) : wr.workspaceName;
 
-        if (WSNAME == wsname) {
+        if (WSNAME == wsname)
             return wr.monitor;
-        }
     }
 
     return "";
@@ -1894,7 +1948,8 @@ bool windowRuleValid(const std::string& RULE) {
 }
 
 bool layerRuleValid(const std::string& RULE) {
-    return RULE == "noanim" || RULE == "blur" || RULE.starts_with("ignorealpha") || RULE.starts_with("ignorezero") || RULE.starts_with("xray") || RULE.starts_with("animation");
+    return RULE == "noanim" || RULE == "blur" || RULE == "blurpopups" || RULE.starts_with("ignorealpha") || RULE.starts_with("ignorezero") || RULE == "dimaround" ||
+        RULE.starts_with("xray") || RULE.starts_with("animation");
 }
 
 std::optional<std::string> CConfigManager::handleWindowRule(const std::string& command, const std::string& value) {
@@ -2028,7 +2083,7 @@ std::optional<std::string> CConfigManager::handleWindowRuleV2(const std::string&
 
         result = removeBeginEndSpacesTabs(result);
 
-        if (result.back() == ',')
+        if (!result.empty() && result.back() == ',')
             result.pop_back();
 
         return result;
@@ -2065,7 +2120,7 @@ std::optional<std::string> CConfigManager::handleWindowRuleV2(const std::string&
         rule.bFocus = extract(FOCUSPOS + 6) == "1" ? 1 : 0;
 
     if (ONWORKSPACEPOS != std::string::npos)
-        rule.iOnWorkspace = configStringToInt(extract(ONWORKSPACEPOS + 12));
+        rule.szOnWorkspace = extract(ONWORKSPACEPOS + 12);
 
     if (RULE == "unset") {
         std::erase_if(m_dWindowRules, [&](const SWindowRule& other) {
@@ -2102,7 +2157,7 @@ std::optional<std::string> CConfigManager::handleWindowRuleV2(const std::string&
                 if (rule.bFocus != -1 && rule.bFocus != other.bFocus)
                     return false;
 
-                if (rule.iOnWorkspace != -1 && rule.iOnWorkspace != other.iOnWorkspace)
+                if (!rule.szOnWorkspace.empty() && rule.szOnWorkspace != other.szOnWorkspace)
                     return false;
 
                 return true;
@@ -2165,24 +2220,24 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
     auto           rules = value.substr(FIRST_DELIM + 1);
     SWorkspaceRule wsRule;
     wsRule.workspaceString = first_ident;
-    if (id == WORKSPACE_INVALID) {
-        // it could be the monitor. If so, second value MUST be
-        // the workspace.
-        const auto WORKSPACE_DELIM = value.find_first_of(',', FIRST_DELIM + 1);
-        auto       wsIdent         = removeBeginEndSpacesTabs(value.substr(FIRST_DELIM + 1, (WORKSPACE_DELIM - FIRST_DELIM - 1)));
-        id                         = getWorkspaceIDFromString(wsIdent, name);
-        if (id == WORKSPACE_INVALID) {
-            Debug::log(ERR, "Invalid workspace identifier found: {}", wsIdent);
-            return "Invalid workspace identifier found: " + wsIdent;
-        }
-        wsRule.monitor         = first_ident;
-        wsRule.workspaceString = wsIdent;
-        wsRule.isDefault       = true; // backwards compat
-        rules                  = value.substr(WORKSPACE_DELIM + 1);
-    }
+    // if (id == WORKSPACE_INVALID) {
+    //     // it could be the monitor. If so, second value MUST be
+    //     // the workspace.
+    //     const auto WORKSPACE_DELIM = value.find_first_of(',', FIRST_DELIM + 1);
+    //     auto       wsIdent         = removeBeginEndSpacesTabs(value.substr(FIRST_DELIM + 1, (WORKSPACE_DELIM - FIRST_DELIM - 1)));
+    //     id                         = getWorkspaceIDFromString(wsIdent, name);
+    //     if (id == WORKSPACE_INVALID) {
+    //         Debug::log(ERR, "Invalid workspace identifier found: {}", wsIdent);
+    //         return "Invalid workspace identifier found: " + wsIdent;
+    //     }
+    //     wsRule.monitor         = first_ident;
+    //     wsRule.workspaceString = wsIdent;
+    //     wsRule.isDefault       = true; // backwards compat
+    //     rules                  = value.substr(WORKSPACE_DELIM + 1);
+    // }
 
-    const static std::string ruleOnCreatedEmtpy    = "on-created-empty:";
-    const static int         ruleOnCreatedEmtpyLen = ruleOnCreatedEmtpy.length();
+    const static std::string ruleOnCreatedEmpty    = "on-created-empty:";
+    const static int         ruleOnCreatedEmptyLen = ruleOnCreatedEmpty.length();
 
     auto                     assignRule = [&](std::string rule) -> std::optional<std::string> {
         size_t delim = std::string::npos;
@@ -2218,8 +2273,8 @@ std::optional<std::string> CConfigManager::handleWorkspaceRules(const std::strin
             wsRule.isPersistent = configStringToInt(rule.substr(delim + 11));
         else if ((delim = rule.find("defaultName:")) != std::string::npos)
             wsRule.defaultName = rule.substr(delim + 12);
-        else if ((delim = rule.find(ruleOnCreatedEmtpy)) != std::string::npos)
-            wsRule.onCreatedEmptyRunCmd = cleanCmdForWorkspace(name, rule.substr(delim + ruleOnCreatedEmtpyLen));
+        else if ((delim = rule.find(ruleOnCreatedEmpty)) != std::string::npos)
+            wsRule.onCreatedEmptyRunCmd = cleanCmdForWorkspace(name, rule.substr(delim + ruleOnCreatedEmptyLen));
         else if ((delim = rule.find("layoutopt:")) != std::string::npos) {
             std::string opt = rule.substr(delim + 10);
             if (!opt.contains(":")) {

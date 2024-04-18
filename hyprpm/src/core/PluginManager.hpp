@@ -32,6 +32,8 @@ enum ePluginLoadStateReturn {
 struct SHyprlandVersion {
     std::string branch;
     std::string hash;
+    std::string date;
+    int         commits = 0;
 };
 
 class CPluginManager {
@@ -53,6 +55,8 @@ class CPluginManager {
     SHyprlandVersion       getHyprlandVersion();
 
     void                   notify(const eNotifyIcons icon, uint32_t color, int durationMs, const std::string& message);
+
+    bool                   hasDeps();
 
     bool                   m_bVerbose = false;
 

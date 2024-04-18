@@ -12,8 +12,18 @@ static int cursorAnimTimer(void* data) {
     return 1;
 }
 
+static void hcLogger(enum eHyprcursorLogLevel level, char* message) {
+    if (level == HC_LOG_TRACE)
+        return;
+
+    Debug::log(NONE, "[hc] {}", message);
+}
+
 CCursorManager::CCursorManager() {
-    m_pHyprcursor = std::make_unique<Hyprcursor::CHyprcursorManager>(m_szTheme.empty() ? nullptr : m_szTheme.c_str());
+    m_pHyprcursor = std::make_unique<Hyprcursor::CHyprcursorManager>(m_szTheme.empty() ? nullptr : m_szTheme.c_str(), hcLogger);
+
+    if (!m_pHyprcursor->valid())
+        Debug::log(ERR, "Hyprcursor failed loading theme \"{}\", falling back to X.", m_szTheme);
 
     // find default size. First, HYPRCURSOR_SIZE, then XCURSOR_SIZE, then 24
     auto SIZE = getenv("HYPRCURSOR_SIZE");
@@ -119,6 +129,7 @@ void CCursorManager::setCursorFromName(const std::string& name) {
 
         if (m_sCurrentCursorShapeData.images.size() < 1) {
             Debug::log(ERR, "BUG THIS: No fallback found for a cursor in setCursorFromName");
+            wlr_cursor_set_xcursor(g_pCompositor->m_sWLRCursor, m_pWLRXCursorMgr, name.c_str());
             return;
         }
     }
@@ -220,12 +231,12 @@ void CCursorManager::updateTheme() {
 }
 
 void CCursorManager::changeTheme(const std::string& name, const int size) {
-    m_pHyprcursor = std::make_unique<Hyprcursor::CHyprcursorManager>(name.empty() ? "" : name.c_str());
+    m_pHyprcursor = std::make_unique<Hyprcursor::CHyprcursorManager>(name.empty() ? "" : name.c_str(), hcLogger);
     m_szTheme     = name;
     m_iSize       = size;
 
-    setenv("XCURSOR_SIZE", std::to_string(m_iSize).c_str(), true);
-    setenv("XCURSOR_THEME", name.c_str(), true);
+    if (!m_pHyprcursor->valid())
+        Debug::log(ERR, "Hyprcursor failed loading theme \"{}\", falling back to X.", m_szTheme);
 
     updateTheme();
 }

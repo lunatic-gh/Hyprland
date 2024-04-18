@@ -3,15 +3,17 @@
 #include "../Compositor.hpp"
 
 SLayerSurface::SLayerSurface() {
-    alpha.create(g_pConfigManager->getAnimationPropertyConfig("fadeLayers"), nullptr, AVARDAMAGE_ENTIRE);
-    realPosition.create(g_pConfigManager->getAnimationPropertyConfig("layers"), nullptr, AVARDAMAGE_ENTIRE);
-    realSize.create(g_pConfigManager->getAnimationPropertyConfig("layers"), nullptr, AVARDAMAGE_ENTIRE);
-    alpha.m_pLayer        = this;
-    realPosition.m_pLayer = this;
-    realSize.m_pLayer     = this;
+    alpha.create(g_pConfigManager->getAnimationPropertyConfig("fadeLayersIn"), this, AVARDAMAGE_ENTIRE);
+    realPosition.create(g_pConfigManager->getAnimationPropertyConfig("layersIn"), this, AVARDAMAGE_ENTIRE);
+    realSize.create(g_pConfigManager->getAnimationPropertyConfig("layersIn"), this, AVARDAMAGE_ENTIRE);
     alpha.registerVar();
     realPosition.registerVar();
     realSize.registerVar();
+
+    alpha.setUpdateCallback([this](void*) {
+        if (dimAround)
+            g_pHyprRenderer->damageMonitor(g_pCompositor->getMonitorFromID(monitorID));
+    });
 
     alpha.setValueAndWarp(0.f);
 }
@@ -29,6 +31,7 @@ void SLayerSurface::applyRules() {
     forceBlur        = false;
     ignoreAlpha      = false;
     ignoreAlphaValue = 0.f;
+    dimAround        = false;
     xray             = -1;
     animationStyle.reset();
 
@@ -37,6 +40,8 @@ void SLayerSurface::applyRules() {
             noAnimations = true;
         else if (rule.rule == "blur")
             forceBlur = true;
+        else if (rule.rule == "blurpopups")
+            forceBlurPopups = true;
         else if (rule.rule.starts_with("ignorealpha") || rule.rule.starts_with("ignorezero")) {
             const auto  FIRST_SPACE_POS = rule.rule.find_first_of(' ');
             std::string alphaValue      = "";
@@ -48,6 +53,8 @@ void SLayerSurface::applyRules() {
                 if (!alphaValue.empty())
                     ignoreAlphaValue = std::stof(alphaValue);
             } catch (...) { Debug::log(ERR, "Invalid value passed to ignoreAlpha"); }
+        } else if (rule.rule == "dimaround") {
+            dimAround = true;
         } else if (rule.rule.starts_with("xray")) {
             CVarList vars{rule.rule, 0, ' '};
             try {
@@ -62,12 +69,36 @@ void SLayerSurface::applyRules() {
 
 void SLayerSurface::startAnimation(bool in, bool instant) {
     const auto ANIMSTYLE = animationStyle.value_or(realPosition.m_pConfig->pValues->internalStyle);
+    if (in) {
+        realPosition.m_pConfig = g_pConfigManager->getAnimationPropertyConfig("layersIn");
+        realSize.m_pConfig     = g_pConfigManager->getAnimationPropertyConfig("layersIn");
+        alpha.m_pConfig        = g_pConfigManager->getAnimationPropertyConfig("fadeLayersIn");
+    } else {
+        realPosition.m_pConfig = g_pConfigManager->getAnimationPropertyConfig("layersOut");
+        realSize.m_pConfig     = g_pConfigManager->getAnimationPropertyConfig("layersOut");
+        alpha.m_pConfig        = g_pConfigManager->getAnimationPropertyConfig("fadeLayersOut");
+    }
 
-    if (ANIMSTYLE == "slide") {
+    if (ANIMSTYLE.starts_with("slide")) {
         // get closest edge
-        const auto                    MIDDLE = geometry.middle();
+        const auto MIDDLE = geometry.middle();
 
-        const auto                    PMONITOR = g_pCompositor->getMonitorFromVector(MIDDLE);
+        const auto PMONITOR = g_pCompositor->getMonitorFromVector(MIDDLE);
+
+        int        force = -1;
+
+        CVarList   args(ANIMSTYLE, 0, 's');
+        if (args.size() > 1) {
+            const auto ARG2 = args[1];
+            if (ARG2 == "top")
+                force = 0;
+            else if (ARG2 == "bottom")
+                force = 1;
+            else if (ARG2 == "left")
+                force = 2;
+            else if (ARG2 == "right")
+                force = 3;
+        }
 
         const std::array<Vector2D, 4> edgePoints = {
             PMONITOR->vecPosition + Vector2D{PMONITOR->vecSize.x / 2, 0},
@@ -76,13 +107,15 @@ void SLayerSurface::startAnimation(bool in, bool instant) {
             PMONITOR->vecPosition + Vector2D{PMONITOR->vecSize.x, PMONITOR->vecSize.y / 2},
         };
 
-        float  closest = std::numeric_limits<float>::max();
-        size_t leader  = 0;
-        for (size_t i = 0; i < 4; ++i) {
-            float dist = MIDDLE.distance(edgePoints[i]);
-            if (dist < closest) {
-                leader  = i;
-                closest = dist;
+        float closest = std::numeric_limits<float>::max();
+        int   leader  = force;
+        if (leader == -1) {
+            for (size_t i = 0; i < 4; ++i) {
+                float dist = MIDDLE.distance(edgePoints[i]);
+                if (dist < closest) {
+                    leader  = i;
+                    closest = dist;
+                }
             }
         }
 
@@ -99,7 +132,7 @@ void SLayerSurface::startAnimation(bool in, bool instant) {
                 break;
             case 1:
                 // BOTTOM
-                prePos = {geometry.x, PMONITOR->vecPosition.y + PMONITOR->vecPosition.y};
+                prePos = {geometry.x, PMONITOR->vecPosition.y + PMONITOR->vecSize.y};
                 break;
             case 2:
                 // LEFT
@@ -166,6 +199,16 @@ bool SLayerSurface::isFadedOut() {
         return false;
 
     return !realPosition.isBeingAnimated() && !realSize.isBeingAnimated() && !alpha.isBeingAnimated();
+}
+
+int SLayerSurface::popupsCount() {
+    if (!layerSurface || !mapped || fadingOut)
+        return 0;
+
+    int no = 0;
+    wlr_layer_surface_v1_for_each_popup_surface(
+        layerSurface, [](wlr_surface* s, int x, int y, void* data) { *(int*)data += 1; }, &no);
+    return no;
 }
 
 void SKeyboard::updateXKBTranslationState(xkb_keymap* const keymap) {

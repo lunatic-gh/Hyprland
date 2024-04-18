@@ -3,7 +3,7 @@
 #include "../events/Events.hpp"
 #include "../defines.hpp"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
-#include "../Window.hpp"
+#include "../desktop/Window.hpp"
 #include "../desktop/Subsurface.hpp"
 #include "../desktop/Popup.hpp"
 #include "AnimatedVariable.hpp"
@@ -22,6 +22,7 @@ struct SLayerSurface {
     void                        applyRules();
     void                        startAnimation(bool in, bool instant = false);
     bool                        isFadedOut();
+    int                         popupsCount();
 
     CAnimatedVariable<Vector2D> realPosition;
     CAnimatedVariable<Vector2D> realSize;
@@ -58,9 +59,11 @@ struct SLayerSurface {
     bool                       noAnimations  = false;
 
     bool                       forceBlur        = false;
+    bool                       forceBlurPopups  = false;
     int                        xray             = -1;
     bool                       ignoreAlpha      = false;
     float                      ignoreAlphaValue = 0.f;
+    bool                       dimAround        = false;
 
     std::optional<std::string> animationStyle;
 
@@ -217,6 +220,8 @@ struct STablet {
 
     std::string           boundOutput = "";
 
+    CBox                  activeArea;
+
     //
     bool operator==(const STablet& b) const {
         return wlrDevice == b.wlrDevice;
@@ -265,8 +270,9 @@ struct STabletPad {
 };
 
 struct SIdleInhibitor {
-    wlr_idle_inhibitor_v1* pWlrInhibitor = nullptr;
-    CWindow*               pWindow       = nullptr;
+    wlr_idle_inhibitor_v1* pWlrInhibitor   = nullptr;
+    CWindow*               pWindow         = nullptr;
+    HOOK_CALLBACK_FN*      onWindowDestroy = nullptr;
 
     DYNLISTENER(Destroy);
 
@@ -276,32 +282,16 @@ struct SIdleInhibitor {
 };
 
 struct SSwipeGesture {
-    CWorkspace* pWorkspaceBegin = nullptr;
+    PHLWORKSPACE pWorkspaceBegin = nullptr;
 
-    double      delta = 0;
+    double       delta = 0;
 
-    int         initialDirection = 0;
-    float       avgSpeed         = 0;
-    int         speedPoints      = 0;
-    int         touch_id         = 0;
+    int          initialDirection = 0;
+    float        avgSpeed         = 0;
+    int          speedPoints      = 0;
+    int          touch_id         = 0;
 
-    CMonitor*   pMonitor = nullptr;
-};
-
-struct STextInputV1;
-
-struct STextInput {
-    wlr_text_input_v3* pWlrInput = nullptr;
-    STextInputV1*      pV1Input  = nullptr;
-
-    wlr_surface*       pPendingSurface = nullptr;
-
-    DYNLISTENER(textInputEnable);
-    DYNLISTENER(textInputDisable);
-    DYNLISTENER(textInputCommit);
-    DYNLISTENER(textInputDestroy);
-
-    DYNLISTENER(pendingSurfaceDestroy);
+    CMonitor*    pMonitor = nullptr;
 };
 
 struct SIMEKbGrab {
@@ -310,26 +300,6 @@ struct SIMEKbGrab {
     wlr_keyboard*                      pKeyboard = nullptr;
 
     DYNLISTENER(grabDestroy);
-};
-
-struct SIMEPopup {
-    wlr_input_popup_surface_v2* pSurface = nullptr;
-
-    int                         x, y;
-    int                         realX, realY;
-    bool                        visible;
-    Vector2D                    lastSize;
-
-    DYNLISTENER(mapPopup);
-    DYNLISTENER(unmapPopup);
-    DYNLISTENER(destroyPopup);
-    DYNLISTENER(commitPopup);
-
-    DYNLISTENER(focusedSurfaceUnmap);
-
-    bool operator==(const SIMEPopup& other) const {
-        return pSurface == other.pSurface;
-    }
 };
 
 struct STouchDevice {

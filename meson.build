@@ -33,7 +33,7 @@ if cpp_compiler.check_header('execinfo.h')
   add_project_arguments('-DHAS_EXECINFO', language: 'cpp')
 endif
 
-wlroots = subproject('wlroots', default_options: ['examples=false', 'renderers=gles2'])
+wlroots = subproject('wlroots-hyprland', default_options: ['examples=false', 'renderers=gles2'])
 have_xwlr = wlroots.get_variable('features').get('xwayland')
 xcb_dep = dependency('xcb', required: get_option('xwayland'))
 
@@ -51,6 +51,7 @@ if not have_xwayland
 endif
 
 backtrace_dep = cpp_compiler.find_library('execinfo', required: false)
+epoll_dep = dependency('epoll-shim', required: false) # timerfd on BSDs
 systemd_dep = dependency('libsystemd', required: get_option('systemd'))
 
 if get_option('systemd').enabled()

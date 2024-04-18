@@ -1,6 +1,7 @@
 #pragma once
 
 #include "IHyprLayout.hpp"
+#include "../desktop/DesktopTypes.hpp"
 #include "../config/ConfigManager.hpp"
 #include <vector>
 #include <list>
@@ -61,11 +62,11 @@ class CHyprMasterLayout : public IHyprLayout {
     virtual std::any                 layoutMessage(SLayoutMessageHeader, std::string);
     virtual SWindowRenderLayoutHints requestRenderHints(CWindow*);
     virtual void                     switchWindows(CWindow*, CWindow*);
-    virtual void                     moveWindowTo(CWindow*, const std::string& dir);
+    virtual void                     moveWindowTo(CWindow*, const std::string& dir, bool silent);
     virtual void                     alterSplitRatio(CWindow*, float, bool);
     virtual std::string              getLayoutName();
     virtual void                     replaceWindowDataWith(CWindow* from, CWindow* to);
-    virtual Vector2D                 predictSizeForNewWindow();
+    virtual Vector2D                 predictSizeForNewWindowTiled();
 
     virtual void                     onEnable();
     virtual void                     onDisable();
@@ -79,12 +80,13 @@ class CHyprMasterLayout : public IHyprLayout {
     void                              buildOrientationCycleVectorFromVars(std::vector<eOrientation>& cycle, CVarList& vars);
     void                              buildOrientationCycleVectorFromEOperation(std::vector<eOrientation>& cycle);
     void                              runOrientationCycle(SLayoutMessageHeader& header, CVarList* vars, int next);
+    eOrientation                      getDynamicOrientation(PHLWORKSPACE);
     int                               getNodesOnWorkspace(const int&);
     void                              applyNodeDataToWindow(SMasterNodeData*);
     SMasterNodeData*                  getNodeFromWindow(CWindow*);
     SMasterNodeData*                  getMasterNodeOnWorkspace(const int&);
     SMasterWorkspaceData*             getMasterWorkspaceData(const int&);
-    void                              calculateWorkspace(const int&);
+    void                              calculateWorkspace(PHLWORKSPACE);
     CWindow*                          getNextWindow(CWindow*, bool);
     int                               getMastersOnWorkspace(const int&);
 

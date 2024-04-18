@@ -6,7 +6,7 @@ index 1d2c7f9f..c5ef4e67 100644
    add_project_arguments('-DHAS_EXECINFO', language: 'cpp')
  endif
  
--wlroots = subproject('wlroots', default_options: ['examples=false', 'renderers=gles2'])
+-wlroots = subproject('wlroots-hyprland', default_options: ['examples=false', 'renderers=gles2'])
 -have_xwlr = wlroots.get_variable('features').get('xwayland')
 -xcb_dep = dependency('xcb', required: get_option('xwayland'))
 -
@@ -46,13 +46,14 @@ index 45701f5f..3505cefe 100644
      dependency('cairo'),
      dependency('hyprcursor'),
      dependency('hyprlang', version: '>= 0.3.2'),
-@@ -16,12 +16,12 @@ executable('Hyprland', src,
+@@ -17,11 +17,11 @@ executable('Hyprland', src,
      dependency('egl'),
      dependency('xkbcommon'),
      dependency('libinput'),
 -    xcb_dep,
 +    dependency('xcb', required: get_option('xwayland')),
      backtrace_dep,
+     epoll_dep,
      systemd_dep,
 -    udis86,
 +    dependency('udis86'),

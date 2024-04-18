@@ -8,11 +8,10 @@
     systems.url = "github:nix-systems/default-linux";
 
     wlroots = {
-      type = "gitlab";
-      host = "gitlab.freedesktop.org";
-      owner = "wlroots";
-      repo = "wlroots";
-      rev = "50eae512d9cecbf0b3b1898bb1f0b40fa05fe19b";
+      type = "github";
+      owner = "hyprwm";
+      repo = "wlroots-hyprland";
+      rev = "611a4f24cd2384378f6e500253983107c6656c64";
       flake = false;
     };
 
@@ -20,6 +19,7 @@
       url = "github:hyprwm/hyprcursor";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.systems.follows = "systems";
+      inputs.hyprlang.follows = "hyprlang";
     };
 
     hyprland-protocols = {

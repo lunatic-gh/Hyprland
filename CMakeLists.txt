@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.27)
 include(CheckIncludeFile)
 
 # Get version
@@ -54,25 +54,22 @@ else()
 endif()
 
 ExternalProject_Add(
-    wlroots
-    PREFIX ${CMAKE_SOURCE_DIR}/subprojects/wlroots
-    SOURCE_DIR ${CMAKE_SOURCE_DIR}/subprojects/wlroots
-    PATCH_COMMAND sed -E -i -e "s/(soversion = .*$)/soversion = 13032/g" meson.build
-    CONFIGURE_COMMAND meson setup --reconfigure build --buildtype=${BUILDTYPE_LOWER} -Dwerror=false -Dxwayland=$<IF:$<BOOL:${NO_XWAYLAND}>,disabled,enabled> -Dexamples=false -Drenderers=gles2 $<IF:$<BOOL:${WITH_ASAN}>,-Db_sanitize=address,-Db_sanitize=none>
+    wlroots-hyprland
+    PREFIX ${CMAKE_SOURCE_DIR}/subprojects/wlroots-hyprland
+    SOURCE_DIR ${CMAKE_SOURCE_DIR}/subprojects/wlroots-hyprland
+    CONFIGURE_COMMAND meson setup --reconfigure build --buildtype=${BUILDTYPE_LOWER} -Dwerror=false -Dxwayland=$<IF:$<BOOL:${NO_XWAYLAND}>,disabled,enabled> -Dexamples=false -Drenderers=gles2 -Dbackends=drm,libinput $<IF:$<BOOL:${WITH_ASAN}>,-Db_sanitize=address,-Db_sanitize=none>
     BUILD_COMMAND ninja -C build
     BUILD_ALWAYS true
     BUILD_IN_SOURCE true
-    BUILD_BYPRODUCTS ${CMAKE_SOURCE_DIR}/subprojects/wlroots/build/libwlroots.so.13032
-    INSTALL_COMMAND echo "wlroots: install not needed"
+    BUILD_BYPRODUCTS ${CMAKE_SOURCE_DIR}/subprojects/wlroots-hyprland/build/libwlroots.a
+    INSTALL_COMMAND echo "wlroots-hyprland: install not needed"
 )
 
-find_program(WaylandScanner NAMES wayland-scanner)
+find_package(PkgConfig REQUIRED)
+
+pkg_get_variable(WaylandScanner wayland-scanner wayland_scanner)
 message(STATUS "Found WaylandScanner at ${WaylandScanner}")
-execute_process(
-    COMMAND pkg-config --variable=pkgdatadir wayland-protocols
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE WAYLAND_PROTOCOLS_DIR
-    OUTPUT_STRIP_TRAILING_WHITESPACE)
+pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
 message(STATUS "Found wayland-protocols at ${WAYLAND_PROTOCOLS_DIR}")
 
 if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
@@ -86,22 +83,34 @@ endif()
 include_directories(
   .
   "src/"
-  "subprojects/wlroots/include/"
-  "subprojects/wlroots/build/include/"
+  "subprojects/wlroots-hyprland/include/"
+  "subprojects/wlroots-hyprland/build/include/"
   "subprojects/udis86/"
   "protocols/")
 set(CMAKE_CXX_STANDARD 23)
 add_compile_definitions(WLR_USE_UNSTABLE)
 add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-unused-value -Wno-missing-field-initializers -Wno-narrowing -Wno-pointer-arith)
-add_link_options(-rdynamic)
-set(CMAKE_ENABLE_EXPORTS TRUE)
+
+set(CMAKE_EXECUTABLE_ENABLE_EXPORTS TRUE)
 
 message(STATUS "Checking deps...")
 
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
-find_package(OpenGL REQUIRED)
-pkg_check_modules(deps REQUIRED IMPORTED_TARGET wayland-server wayland-client wayland-cursor wayland-protocols cairo libdrm xkbcommon libinput pango pangocairo pixman-1 hyprlang>=0.3.2 hyprcursor) # we do not check for wlroots, as we provide it ourselves
+
+if(LEGACY_RENDERER)
+    set(GLES_VERSION "GLES2")
+else()
+    set(GLES_VERSION "GLES3")
+endif()
+find_package(OpenGL REQUIRED COMPONENTS ${GLES_VERSION})
+
+pkg_check_modules(deps REQUIRED IMPORTED_TARGET
+    xkbcommon
+    wayland-server wayland-client wayland-cursor wayland-protocols
+    cairo pango pangocairo pixman-1
+    libdrm libinput hwdata libseat libdisplay-info libliftoff libudev gbm
+    hyprlang>=0.3.2 hyprcursor>=0.1.7
+)
 
 file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
 
@@ -112,7 +121,7 @@ if(USE_TRACY)
 endif()
 
 add_executable(Hyprland ${SRCFILES} ${TRACY_CPP_FILES})
-add_dependencies(Hyprland wlroots)
+add_dependencies(Hyprland wlroots-hyprland)
 
 if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
     message(STATUS "Setting debug flags")
@@ -155,6 +164,12 @@ if(HAVE_LIBEXECINFO)
     target_link_libraries(Hyprland execinfo)
 endif()
 
+check_include_file("sys/timerfd.h" HAS_TIMERFD)
+pkg_check_modules(epoll IMPORTED_TARGET epoll-shim)
+if(NOT HAS_TIMERFD AND epoll_FOUND)
+    target_link_libraries(Hyprland PkgConfig::epoll)
+endif()
+
 if(LEGACY_RENDERER)
     message(STATUS "Using the legacy GLES2 renderer!")
     add_compile_definitions(LEGACY_RENDERER)
@@ -165,8 +180,12 @@ if(NO_XWAYLAND)
     add_compile_definitions(NO_XWAYLAND)
 else()
     message(STATUS "XWAYLAND Enabled (NO_XWAYLAND not defined) checking deps...")
-    pkg_check_modules(xcbdep REQUIRED IMPORTED_TARGET xcb)
-    target_link_libraries(Hyprland PkgConfig::xcbdep)
+    pkg_check_modules(xdeps REQUIRED IMPORTED_TARGET xcb xwayland xcb-util xcb-render xcb-xfixes xcb-icccm xcb-composite xcb-res xcb-ewmh)
+    pkg_check_modules(xcb_errors IMPORTED_TARGET xcb-errors)
+    target_link_libraries(Hyprland PkgConfig::xdeps)
+    if(xcb_errors_FOUND)
+        target_link_libraries(Hyprland PkgConfig::xcb_errors)
+    endif()
 endif()
 
 if(NO_SYSTEMD)
@@ -221,7 +240,7 @@ function(protocol protoPath protoName external)
 endfunction()
 
 target_link_libraries(Hyprland
-        ${CMAKE_SOURCE_DIR}/subprojects/wlroots/build/libwlroots.so.13032 # wlroots is provided by us
+        ${CMAKE_SOURCE_DIR}/subprojects/wlroots-hyprland/build/libwlroots.a
         OpenGL::EGL
         OpenGL::GL
         Threads::Threads

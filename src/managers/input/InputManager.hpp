@@ -3,11 +3,11 @@
 #include "../../defines.hpp"
 #include <list>
 #include "../../helpers/WLClasses.hpp"
-#include "../../Window.hpp"
 #include "../../helpers/Timer.hpp"
 #include "InputMethodRelay.hpp"
 
 class CConstraint;
+class CWindow;
 
 enum eClickBehaviorMode {
     CLICKMODE_DEFAULT = 0,
@@ -184,6 +184,8 @@ class CInputManager {
     // for some bugs in follow mouse 0
     bool m_bLastFocusOnLS = false;
 
+    bool m_bLastFocusOnIMEPopup = false;
+
     // for hiding cursor on touch
     bool m_bLastInputTouch = false;
 
@@ -250,8 +252,6 @@ class CInputManager {
     } m_sCursorSurfaceInfo;
 
     void restoreCursorIconToApp(); // no-op if restored
-
-    bool m_bExitTriggered = false; // for exit dispatcher
 
     friend class CKeybindManager;
     friend class CWLSurface;

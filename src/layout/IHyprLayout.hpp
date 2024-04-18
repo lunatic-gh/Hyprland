@@ -1,8 +1,10 @@
 #pragma once
 
 #include "../defines.hpp"
-#include "../Window.hpp"
 #include <any>
+
+class CWindow;
+class CGradientValueData;
 
 struct SWindowRenderLayoutHints {
     bool                isBorderGradient = false;
@@ -134,7 +136,7 @@ class IHyprLayout {
         Called when the user requests a window move in a direction.
         The layout is free to ignore.
     */
-    virtual void moveWindowTo(CWindow*, const std::string& direction) = 0;
+    virtual void moveWindowTo(CWindow*, const std::string& direction, bool silent = false) = 0;
 
     /*
         Called when the user requests to change the splitratio by or to X
@@ -185,7 +187,13 @@ class IHyprLayout {
         Called to predict the size of a newly opened window to send it a configure.
         Return 0,0 if unpredictable
     */
-    virtual Vector2D predictSizeForNewWindow();
+    virtual Vector2D predictSizeForNewWindowTiled() = 0;
+
+    /*
+        Prefer not overriding, use predictSizeForNewWindowTiled.
+    */
+    virtual Vector2D predictSizeForNewWindow(CWindow* pWindow);
+    virtual Vector2D predictSizeForNewWindowFloating(CWindow* pWindow);
 
   private:
     int         m_iMouseMoveEventCount;
