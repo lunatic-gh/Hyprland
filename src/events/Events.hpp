@@ -99,13 +99,8 @@ namespace Events {
     DYNLISTENFUNC(destroyDragIcon);
     DYNLISTENFUNC(commitDragIcon);
 
-    // Deco XDG
-    LISTENER(NewXDGDeco);
-
     // Renderer destroy
     LISTENER(RendererDestroy);
-
-    LISTENER(newIdleInhibitor);
 
     // session
     LISTENER(sessionActive);
@@ -137,16 +132,4 @@ namespace Events {
 
     // Session Lock
     LISTENER(newSessionLock);
-
-    // Gamma control
-    LISTENER(setGamma);
-
-    // Cursor shape
-    LISTENER(setCursorShape);
-
-    // Tearing hints
-    LISTENER(newTearingHint);
-
-    // Shortcut inhibitor
-    LISTENER(newShortcutInhibitor);
 };

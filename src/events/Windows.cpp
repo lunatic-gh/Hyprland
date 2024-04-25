@@ -3,6 +3,7 @@
 #include "../Compositor.hpp"
 #include "../helpers/WLClasses.hpp"
 #include "../managers/input/InputManager.hpp"
+#include "../managers/TokenManager.hpp"
 #include "../render/Renderer.hpp"
 #include "../config/ConfigValue.hpp"
 
@@ -44,13 +45,14 @@ void setAnimToMove(void* data) {
 void Events::listener_mapWindow(void* owner, void* data) {
     CWindow*    PWINDOW = (CWindow*)owner;
 
-    static auto PINACTIVEALPHA  = CConfigValue<Hyprlang::FLOAT>("decoration:inactive_opacity");
-    static auto PACTIVEALPHA    = CConfigValue<Hyprlang::FLOAT>("decoration:active_opacity");
-    static auto PDIMSTRENGTH    = CConfigValue<Hyprlang::FLOAT>("decoration:dim_strength");
-    static auto PSWALLOW        = CConfigValue<Hyprlang::INT>("misc:enable_swallow");
-    static auto PSWALLOWREGEX   = CConfigValue<std::string>("misc:swallow_regex");
-    static auto PSWALLOWEXREGEX = CConfigValue<std::string>("misc:swallow_exception_regex");
-    static auto PNEWTAKESOVERFS = CConfigValue<Hyprlang::INT>("misc:new_window_takes_over_fullscreen");
+    static auto PINACTIVEALPHA     = CConfigValue<Hyprlang::FLOAT>("decoration:inactive_opacity");
+    static auto PACTIVEALPHA       = CConfigValue<Hyprlang::FLOAT>("decoration:active_opacity");
+    static auto PDIMSTRENGTH       = CConfigValue<Hyprlang::FLOAT>("decoration:dim_strength");
+    static auto PSWALLOW           = CConfigValue<Hyprlang::INT>("misc:enable_swallow");
+    static auto PSWALLOWREGEX      = CConfigValue<std::string>("misc:swallow_regex");
+    static auto PSWALLOWEXREGEX    = CConfigValue<std::string>("misc:swallow_exception_regex");
+    static auto PNEWTAKESOVERFS    = CConfigValue<Hyprlang::INT>("misc:new_window_takes_over_fullscreen");
+    static auto PINITIALWSTRACKING = CConfigValue<Hyprlang::INT>("misc:initial_workspace_tracking");
 
     auto        PMONITOR = g_pCompositor->m_pLastMonitor;
     if (!g_pCompositor->m_pLastMonitor) {
@@ -66,15 +68,49 @@ void Events::listener_mapWindow(void* owner, void* data) {
     PWINDOW->m_szTitle        = g_pXWaylandManager->getTitle(PWINDOW);
     PWINDOW->m_iX11Type       = PWINDOW->m_bIsX11 ? (PWINDOW->m_uSurface.xwayland->override_redirect ? 2 : 1) : 1;
     PWINDOW->m_bFirstMap      = true;
+    PWINDOW->m_szInitialTitle = PWINDOW->m_szTitle;
+    PWINDOW->m_szInitialClass = g_pXWaylandManager->getAppIDClass(PWINDOW);
+
+    // check for token
+    std::string requestedWorkspace = "";
+    bool        workspaceSilent    = false;
+
+    if (*PINITIALWSTRACKING) {
+        const auto WINDOWENV = PWINDOW->getEnv();
+        if (WINDOWENV.contains("HL_INITIAL_WORKSPACE_TOKEN")) {
+            const auto SZTOKEN = WINDOWENV.at("HL_INITIAL_WORKSPACE_TOKEN");
+            Debug::log(LOG, "New window contains HL_INITIAL_WORKSPACE_TOKEN: {}", SZTOKEN);
+            const auto TOKEN = g_pTokenManager->getToken(SZTOKEN);
+            if (TOKEN) {
+                // find workspace and use it
+                SInitialWorkspaceToken WS = std::any_cast<SInitialWorkspaceToken>(TOKEN->data);
+
+                Debug::log(LOG, "HL_INITIAL_WORKSPACE_TOKEN {} -> {}", SZTOKEN, WS.workspace);
+
+                if (g_pCompositor->getWorkspaceByString(WS.workspace) != PWINDOW->m_pWorkspace) {
+                    requestedWorkspace = WS.workspace;
+                    workspaceSilent    = true;
+                }
+
+                if (*PINITIALWSTRACKING == 1) // one-shot token
+                    g_pTokenManager->removeToken(TOKEN);
+                else if (*PINITIALWSTRACKING == 2) { // persistent
+                    if (!WS.primaryOwner) {
+                        WS.primaryOwner = PWINDOW;
+                        TOKEN->data     = WS;
+                    }
+
+                    PWINDOW->m_szInitialWorkspaceToken = SZTOKEN;
+                }
+            }
+        }
+    }
 
     if (g_pInputManager->m_bLastFocusOnLS) // waybar fix
         g_pInputManager->releaseAllMouseButtons();
 
     // Set all windows tiled regardless of anything
     g_pXWaylandManager->setWindowStyleTiled(PWINDOW, WLR_EDGE_LEFT | WLR_EDGE_RIGHT | WLR_EDGE_TOP | WLR_EDGE_BOTTOM);
-
-    // Foreign Toplevel
-    PWINDOW->createToplevelHandle();
 
     // checks if the window wants borders and sets the appropriate flag
     g_pXWaylandManager->checkBorders(PWINDOW);
@@ -108,19 +144,14 @@ void Events::listener_mapWindow(void* owner, void* data) {
     }
 
     // window rules
-    const auto  WINDOWRULES        = g_pConfigManager->getMatchingRules(PWINDOW, false);
-    std::string requestedWorkspace = "";
-    bool        workspaceSilent    = false;
-    bool        requestsFullscreen = PWINDOW->m_bWantsInitialFullscreen ||
+    const auto WINDOWRULES        = g_pConfigManager->getMatchingRules(PWINDOW, false);
+    bool       requestsFullscreen = PWINDOW->m_bWantsInitialFullscreen ||
         (!PWINDOW->m_bIsX11 && PWINDOW->m_uSurface.xdg->role == WLR_XDG_SURFACE_ROLE_TOPLEVEL && PWINDOW->m_uSurface.xdg->toplevel->requested.fullscreen) ||
         (PWINDOW->m_bIsX11 && PWINDOW->m_uSurface.xwayland->fullscreen);
     bool requestsFakeFullscreen = false;
     bool requestsMaximize       = false;
     bool overridingNoFullscreen = false;
     bool overridingNoMaximize   = false;
-
-    PWINDOW->m_szInitialTitle = g_pXWaylandManager->getTitle(PWINDOW);
-    PWINDOW->m_szInitialClass = g_pXWaylandManager->getAppIDClass(PWINDOW);
 
     for (auto& r : WINDOWRULES) {
         if (r.szRule.starts_with("monitor")) {
@@ -751,9 +782,6 @@ void Events::listener_unmapWindow(void* owner, void* data) {
     g_pAnimationManager->onWindowPostCreateClose(PWINDOW, true);
     PWINDOW->m_fAlpha = 0.f;
 
-    // Destroy Foreign Toplevel
-    PWINDOW->destroyToplevelHandle();
-
     // recheck idle inhibitors
     g_pInputManager->recheckIdleInhibitorStatus();
 
@@ -978,9 +1006,7 @@ void Events::listener_fullscreenWindow(void* owner, void* data) {
 }
 
 void Events::listener_activateXDG(wl_listener* listener, void* data) {
-    const auto  E = (wlr_xdg_activation_v1_request_activate_event*)data;
-
-    static auto PFOCUSONACTIVATE = CConfigValue<Hyprlang::INT>("misc:focus_on_activate");
+    const auto E = (wlr_xdg_activation_v1_request_activate_event*)data;
 
     Debug::log(LOG, "Activate request for surface at {:x}", (uintptr_t)E->surface);
 
@@ -992,25 +1018,11 @@ void Events::listener_activateXDG(wl_listener* listener, void* data) {
     if (!PWINDOW || PWINDOW == g_pCompositor->m_pLastWindow || (PWINDOW->m_eSuppressedEvents & SUPPRESS_ACTIVATE))
         return;
 
-    g_pEventManager->postEvent(SHyprIPCEvent{"urgent", std::format("{:x}", (uintptr_t)PWINDOW)});
-    EMIT_HOOK_EVENT("urgent", PWINDOW);
-
-    PWINDOW->m_bIsUrgent = true;
-
-    if (!*PFOCUSONACTIVATE || (PWINDOW->m_eSuppressedEvents & SUPPRESS_ACTIVATE_FOCUSONLY))
-        return;
-
-    if (PWINDOW->m_bIsFloating)
-        g_pCompositor->changeWindowZOrder(PWINDOW, true);
-
-    g_pCompositor->focusWindow(PWINDOW);
-    g_pCompositor->warpCursorTo(PWINDOW->middle());
+    PWINDOW->activate();
 }
 
 void Events::listener_activateX11(void* owner, void* data) {
-    const auto  PWINDOW = (CWindow*)owner;
-
-    static auto PFOCUSONACTIVATE = CConfigValue<Hyprlang::INT>("misc:focus_on_activate");
+    const auto PWINDOW = (CWindow*)owner;
 
     Debug::log(LOG, "X11 Activate request for window {}", PWINDOW);
 
@@ -1031,17 +1043,7 @@ void Events::listener_activateX11(void* owner, void* data) {
     if (PWINDOW == g_pCompositor->m_pLastWindow || (PWINDOW->m_eSuppressedEvents & SUPPRESS_ACTIVATE))
         return;
 
-    g_pEventManager->postEvent(SHyprIPCEvent{"urgent", std::format("{:x}", (uintptr_t)PWINDOW)});
-    EMIT_HOOK_EVENT("urgent", PWINDOW);
-
-    if (!*PFOCUSONACTIVATE || (PWINDOW->m_eSuppressedEvents & SUPPRESS_ACTIVATE_FOCUSONLY))
-        return;
-
-    if (PWINDOW->m_bIsFloating)
-        g_pCompositor->changeWindowZOrder(PWINDOW, true);
-
-    g_pCompositor->focusWindow(PWINDOW);
-    g_pCompositor->warpCursorTo(PWINDOW->middle());
+    PWINDOW->activate();
 }
 
 void Events::listener_configureX11(void* owner, void* data) {
@@ -1232,11 +1234,6 @@ void Events::listener_newXDGToplevel(wl_listener* listener, void* data) {
     PNEWWINDOW->m_pWLSurface.assign(g_pXWaylandManager->getWindowSurface(PNEWWINDOW), PNEWWINDOW);
 }
 
-void Events::listener_NewXDGDeco(wl_listener* listener, void* data) {
-    const auto WLRDECO = (wlr_xdg_toplevel_decoration_v1*)data;
-    wlr_xdg_toplevel_decoration_v1_set_mode(WLRDECO, WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
-}
-
 void Events::listener_requestMaximize(void* owner, void* data) {
     const auto PWINDOW = (CWindow*)owner;
 
@@ -1245,9 +1242,8 @@ void Events::listener_requestMaximize(void* owner, void* data) {
 
     Debug::log(LOG, "Maximize request for {}", PWINDOW);
     if (!PWINDOW->m_bIsX11) {
-        const auto EV = (wlr_foreign_toplevel_handle_v1_maximized_event*)data;
 
-        g_pCompositor->setWindowFullscreen(PWINDOW, EV ? EV->maximized : !PWINDOW->m_bIsFullscreen,
+        g_pCompositor->setWindowFullscreen(PWINDOW, !PWINDOW->m_bIsFullscreen,
                                            FULLSCREEN_MAXIMIZED); // this will be rejected if there already is a fullscreen window
 
         wlr_xdg_surface_schedule_configure(PWINDOW->m_uSurface.xdg);
@@ -1275,9 +1271,8 @@ void Events::listener_requestMinimize(void* owner, void* data) {
 
         wlr_xwayland_surface_set_minimized(PWINDOW->m_uSurface.xwayland, E->minimize && g_pCompositor->m_pLastWindow != PWINDOW); // fucking DXVK
     } else {
-        const auto E = (wlr_foreign_toplevel_handle_v1_minimized_event*)data;
-        g_pEventManager->postEvent({"minimize", std::format("{:x},{}", (uintptr_t)PWINDOW, E ? (int)E->minimized : 1)});
-        EMIT_HOOK_EVENT("minimize", (std::vector<void*>{PWINDOW, (void*)(E ? (uint64_t)E->minimized : 1)}));
+        g_pEventManager->postEvent({"minimize", std::format("{:x},{}", (uintptr_t)PWINDOW, 1)});
+        EMIT_HOOK_EVENT("minimize", (std::vector<void*>{PWINDOW, (void*)(1)}));
     }
 }
 

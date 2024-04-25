@@ -5,6 +5,7 @@
 #include "../render/decorations/CHyprBorderDecoration.hpp"
 #include "../config/ConfigValue.hpp"
 #include <any>
+#include "../managers/TokenManager.hpp"
 
 CWindow::CWindow() {
     m_vRealPosition.create(g_pConfigManager->getAnimationPropertyConfig("windowsIn"), this, AVARDAMAGE_ENTIRE);
@@ -25,6 +26,8 @@ CWindow::~CWindow() {
         g_pCompositor->m_pLastFocus  = nullptr;
         g_pCompositor->m_pLastWindow = nullptr;
     }
+
+    events.destroy.emit();
 
     if (!g_pHyprOpenGL)
         return;
@@ -271,66 +274,8 @@ IHyprWindowDecoration* CWindow::getDecorationByType(eDecorationType type) {
     return nullptr;
 }
 
-void CWindow::createToplevelHandle() {
-    if (m_bIsX11 && (m_bX11DoesntWantBorders || m_iX11Type == 2))
-        return; // don't create a toplevel
-
-    m_phForeignToplevel = wlr_foreign_toplevel_handle_v1_create(g_pCompositor->m_sWLRToplevelMgr);
-
-    wlr_foreign_toplevel_handle_v1_set_app_id(m_phForeignToplevel, g_pXWaylandManager->getAppIDClass(this).c_str());
-    wlr_foreign_toplevel_handle_v1_output_enter(m_phForeignToplevel, g_pCompositor->getMonitorFromID(m_iMonitorID)->output);
-    wlr_foreign_toplevel_handle_v1_set_title(m_phForeignToplevel, m_szTitle.c_str());
-    wlr_foreign_toplevel_handle_v1_set_maximized(m_phForeignToplevel, false);
-    wlr_foreign_toplevel_handle_v1_set_minimized(m_phForeignToplevel, false);
-    wlr_foreign_toplevel_handle_v1_set_fullscreen(m_phForeignToplevel, false);
-
-    // handle events
-    hyprListener_toplevelActivate.initCallback(
-        &m_phForeignToplevel->events.request_activate, [&](void* owner, void* data) { g_pLayoutManager->getCurrentLayout()->requestFocusForWindow(this); }, this, "Toplevel");
-
-    hyprListener_toplevelFullscreen.initCallback(
-        &m_phForeignToplevel->events.request_fullscreen,
-        [&](void* owner, void* data) {
-            const auto EV = (wlr_foreign_toplevel_handle_v1_fullscreen_event*)data;
-
-            g_pCompositor->setWindowFullscreen(this, EV->fullscreen, FULLSCREEN_FULL);
-        },
-        this, "Toplevel");
-
-    hyprListener_toplevelClose.initCallback(
-        &m_phForeignToplevel->events.request_close, [&](void* owner, void* data) { g_pCompositor->closeWindow(this); }, this, "Toplevel");
-
-    m_iLastToplevelMonitorID = m_iMonitorID;
-}
-
-void CWindow::destroyToplevelHandle() {
-    if (!m_phForeignToplevel)
-        return;
-
-    hyprListener_toplevelActivate.removeCallback();
-    hyprListener_toplevelClose.removeCallback();
-    hyprListener_toplevelFullscreen.removeCallback();
-
-    wlr_foreign_toplevel_handle_v1_destroy(m_phForeignToplevel);
-    m_phForeignToplevel = nullptr;
-}
-
 void CWindow::updateToplevel() {
     updateSurfaceScaleTransformDetails();
-
-    if (!m_phForeignToplevel)
-        return;
-
-    wlr_foreign_toplevel_handle_v1_set_title(m_phForeignToplevel, m_szTitle.c_str());
-    wlr_foreign_toplevel_handle_v1_set_fullscreen(m_phForeignToplevel, m_bIsFullscreen);
-
-    if (m_iLastToplevelMonitorID != m_iMonitorID) {
-        if (const auto PMONITOR = g_pCompositor->getMonitorFromID(m_iLastToplevelMonitorID); PMONITOR && PMONITOR->m_bEnabled)
-            wlr_foreign_toplevel_handle_v1_output_leave(m_phForeignToplevel, PMONITOR->output);
-        wlr_foreign_toplevel_handle_v1_output_enter(m_phForeignToplevel, g_pCompositor->getMonitorFromID(m_iMonitorID)->output);
-
-        m_iLastToplevelMonitorID = m_iMonitorID;
-    }
 }
 
 void sendEnterIter(wlr_surface* pSurface, int x, int y, void* data) {
@@ -382,6 +327,22 @@ void CWindow::moveToWorkspace(PHLWORKSPACE pWorkspace) {
     if (m_pWorkspace == pWorkspace)
         return;
 
+    static auto PINITIALWSTRACKING = CConfigValue<Hyprlang::INT>("misc:initial_workspace_tracking");
+
+    if (!m_szInitialWorkspaceToken.empty()) {
+        const auto TOKEN = g_pTokenManager->getToken(m_szInitialWorkspaceToken);
+        if (TOKEN) {
+            if (*PINITIALWSTRACKING == 2) {
+                // persistent
+                SInitialWorkspaceToken token = std::any_cast<SInitialWorkspaceToken>(TOKEN->data);
+                if (token.primaryOwner == this) {
+                    token.workspace = pWorkspace->getConfigName();
+                    TOKEN->data     = token;
+                }
+            }
+        }
+    }
+
     static auto PCLOSEONLASTSPECIAL = CConfigValue<Hyprlang::INT>("misc:close_special_on_empty");
 
     const auto  OLDWORKSPACE = m_pWorkspace;
@@ -392,8 +353,12 @@ void CWindow::moveToWorkspace(PHLWORKSPACE pWorkspace) {
 
     g_pCompositor->updateWorkspaceWindows(OLDWORKSPACE->m_iID);
     g_pCompositor->updateWorkspaceSpecialRenderData(OLDWORKSPACE->m_iID);
+    g_pLayoutManager->getCurrentLayout()->recalculateMonitor(OLDWORKSPACE->m_iMonitorID);
+
     g_pCompositor->updateWorkspaceWindows(workspaceID());
     g_pCompositor->updateWorkspaceSpecialRenderData(workspaceID());
+    g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m_iMonitorID);
+
     g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 
     if (valid(pWorkspace)) {
@@ -456,6 +421,20 @@ void CWindow::onUnmap() {
     if (g_pInputManager->currentlyDraggedWindow == this)
         g_pInputManager->currentlyDraggedWindow = nullptr;
 
+    static auto PINITIALWSTRACKING = CConfigValue<Hyprlang::INT>("misc:initial_workspace_tracking");
+
+    if (!m_szInitialWorkspaceToken.empty()) {
+        const auto TOKEN = g_pTokenManager->getToken(m_szInitialWorkspaceToken);
+        if (TOKEN) {
+            if (*PINITIALWSTRACKING == 2) {
+                // persistent token, but the first window got removed so the token is gone
+                SInitialWorkspaceToken token = std::any_cast<SInitialWorkspaceToken>(TOKEN->data);
+                if (token.primaryOwner == this)
+                    g_pTokenManager->removeToken(TOKEN);
+            }
+        }
+    }
+
     m_iLastWorkspace = m_pWorkspace->m_iID;
 
     m_vRealPosition.setCallbackOnEnd(unregisterVar);
@@ -486,6 +465,7 @@ void CWindow::onUnmap() {
 
     g_pCompositor->updateWorkspaceWindows(workspaceID());
     g_pCompositor->updateWorkspaceSpecialRenderData(workspaceID());
+    g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m_iMonitorID);
     g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 
     m_pWorkspace.reset();
@@ -529,14 +509,6 @@ void CWindow::onMap() {
 
     m_vReportedSize = m_vPendingReportedSize;
     m_bAnimatingIn  = true;
-
-    for (const auto& ctrl : g_pHyprRenderer->m_vTearingControllers) {
-        if (ctrl->pWlrHint->surface != m_pWLSurface.wlr())
-            continue;
-
-        m_bTearingHint = ctrl->pWlrHint->current;
-        break;
-    }
 
     if (m_bIsX11)
         return;
@@ -853,9 +825,9 @@ void CWindow::createGroup() {
 
         addWindowDeco(std::make_unique<CHyprGroupBarDecoration>(this));
 
-        g_pLayoutManager->getCurrentLayout()->recalculateWindow(this);
         g_pCompositor->updateWorkspaceWindows(workspaceID());
         g_pCompositor->updateWorkspaceSpecialRenderData(workspaceID());
+        g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m_iMonitorID);
         g_pCompositor->updateAllWindowsAnimatedDecorationValues();
     }
 }
@@ -871,6 +843,7 @@ void CWindow::destroyGroup() {
         updateWindowDecos();
         g_pCompositor->updateWorkspaceWindows(workspaceID());
         g_pCompositor->updateWorkspaceSpecialRenderData(workspaceID());
+        g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m_iMonitorID);
         g_pCompositor->updateAllWindowsAnimatedDecorationValues();
         return;
     }
@@ -901,6 +874,7 @@ void CWindow::destroyGroup() {
 
     g_pCompositor->updateWorkspaceWindows(workspaceID());
     g_pCompositor->updateWorkspaceSpecialRenderData(workspaceID());
+    g_pLayoutManager->getCurrentLayout()->recalculateMonitor(m_iMonitorID);
     g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 }
 
@@ -1239,4 +1213,61 @@ int CWindow::workspaceID() {
 
 bool CWindow::onSpecialWorkspace() {
     return m_pWorkspace ? m_pWorkspace->m_bIsSpecialWorkspace : g_pCompositor->isWorkspaceSpecial(m_iLastWorkspace);
+}
+
+std::unordered_map<std::string, std::string> CWindow::getEnv() {
+
+    const auto PID = getPID();
+
+    if (PID <= 1)
+        return {};
+
+    std::unordered_map<std::string, std::string> results;
+
+    //
+    std::string   environFile = "/proc/" + std::to_string(PID) + "/environ";
+    std::ifstream ifs(environFile, std::ios::binary);
+
+    if (!ifs.good())
+        return {};
+
+    std::vector<char> buffer;
+    size_t            needle = 0;
+    buffer.resize(512, '\0');
+    while (ifs.read(buffer.data() + needle, 512)) {
+        buffer.resize(buffer.size() + 512, '\0');
+        needle += 512;
+    }
+
+    std::replace(buffer.begin(), buffer.end() - 1, '\0', '\n');
+
+    CVarList envs(std::string{buffer.data(), needle - 1}, 0, '\n', true);
+
+    for (auto& e : envs) {
+        if (!e.contains('='))
+            continue;
+
+        const auto EQ            = e.find_first_of('=');
+        results[e.substr(0, EQ)] = e.substr(EQ + 1);
+    }
+
+    return results;
+}
+
+void CWindow::activate() {
+    static auto PFOCUSONACTIVATE = CConfigValue<Hyprlang::INT>("misc:focus_on_activate");
+
+    g_pEventManager->postEvent(SHyprIPCEvent{"urgent", std::format("{:x}", (uintptr_t)this)});
+    EMIT_HOOK_EVENT("urgent", this);
+
+    m_bIsUrgent = true;
+
+    if (!*PFOCUSONACTIVATE || (m_eSuppressedEvents & SUPPRESS_ACTIVATE_FOCUSONLY))
+        return;
+
+    if (m_bIsFloating)
+        g_pCompositor->changeWindowZOrder(this, true);
+
+    g_pCompositor->focusWindow(this);
+    g_pCompositor->warpCursorTo(middle());
 }

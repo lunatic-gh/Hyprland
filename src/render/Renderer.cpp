@@ -60,7 +60,7 @@ CHyprRenderer::CHyprRenderer() {
 
     // cursor hiding stuff
 
-    g_pHookSystem->hookDynamic("keyPress", [&](void* self, SCallbackInfo& info, std::any param) {
+    static auto P = g_pHookSystem->hookDynamic("keyPress", [&](void* self, SCallbackInfo& info, std::any param) {
         if (m_sCursorHiddenConditions.hiddenOnKeyboard)
             return;
 
@@ -68,7 +68,7 @@ CHyprRenderer::CHyprRenderer() {
         ensureCursorRenderingMode();
     });
 
-    g_pHookSystem->hookDynamic("mouseMove", [&](void* self, SCallbackInfo& info, std::any param) {
+    static auto P2 = g_pHookSystem->hookDynamic("mouseMove", [&](void* self, SCallbackInfo& info, std::any param) {
         if (!m_sCursorHiddenConditions.hiddenOnKeyboard && m_sCursorHiddenConditions.hiddenOnTouch == g_pInputManager->m_bLastInputTouch &&
             !m_sCursorHiddenConditions.hiddenOnTimeout)
             return;
@@ -96,13 +96,16 @@ static void renderSurface(struct wlr_surface* surface, int x, int y, void* data)
     double outputX = 0, outputY = 0;
     wlr_output_layout_output_coords(g_pCompositor->m_sWLROutputLayout, RDATA->pMonitor->output, &outputX, &outputY);
 
-    CBox windowBox;
+    auto* const PSURFACE = CWLSurface::surfaceFromWlr(surface);
+
+    const float ALPHA = RDATA->alpha * RDATA->fadeAlpha * (PSURFACE ? PSURFACE->m_pAlphaModifier : 1.F);
+
+    CBox        windowBox;
     if (RDATA->surface && surface == RDATA->surface) {
         windowBox = {(int)outputX + RDATA->x + x, (int)outputY + RDATA->y + y, RDATA->w, RDATA->h};
 
         // however, if surface buffer w / h < box, we need to adjust them
-        auto* const PSURFACE = CWLSurface::surfaceFromWlr(surface);
-        const auto  PWINDOW  = PSURFACE ? PSURFACE->getWindow() : nullptr;
+        const auto PWINDOW = PSURFACE ? PSURFACE->getWindow() : nullptr;
 
         if (PSURFACE && !PSURFACE->m_bFillIgnoreSmall && PSURFACE->small() /* guarantees PWINDOW */) {
             const auto CORRECT = PSURFACE->correctSmallVec();
@@ -175,7 +178,7 @@ static void renderSurface(struct wlr_surface* surface, int x, int y, void* data)
         rounding = 0;
 
     const bool WINDOWOPAQUE    = RDATA->pWindow && RDATA->pWindow->m_pWLSurface.wlr() == surface ? RDATA->pWindow->opaque() : false;
-    const bool CANDISABLEBLEND = RDATA->alpha * RDATA->fadeAlpha >= 1.f && rounding == 0 && (WINDOWOPAQUE || surface->opaque);
+    const bool CANDISABLEBLEND = ALPHA >= 1.f && rounding == 0 && (WINDOWOPAQUE || surface->opaque);
 
     if (CANDISABLEBLEND)
         g_pHyprOpenGL->blend(false);
@@ -183,19 +186,19 @@ static void renderSurface(struct wlr_surface* surface, int x, int y, void* data)
         g_pHyprOpenGL->blend(true);
 
     if (RDATA->surface && surface == RDATA->surface) {
-        if (wlr_xwayland_surface_try_from_wlr_surface(surface) && !wlr_xwayland_surface_try_from_wlr_surface(surface)->has_alpha && RDATA->fadeAlpha * RDATA->alpha == 1.f) {
-            g_pHyprOpenGL->renderTexture(TEXTURE, &windowBox, RDATA->fadeAlpha * RDATA->alpha, rounding, true);
+        if (wlr_xwayland_surface_try_from_wlr_surface(surface) && !wlr_xwayland_surface_try_from_wlr_surface(surface)->has_alpha && ALPHA == 1.f) {
+            g_pHyprOpenGL->renderTexture(TEXTURE, &windowBox, ALPHA, rounding, true);
         } else {
             if (RDATA->blur)
-                g_pHyprOpenGL->renderTextureWithBlur(TEXTURE, &windowBox, RDATA->fadeAlpha * RDATA->alpha, surface, rounding, RDATA->blockBlurOptimization, RDATA->fadeAlpha);
+                g_pHyprOpenGL->renderTextureWithBlur(TEXTURE, &windowBox, ALPHA, surface, rounding, RDATA->blockBlurOptimization, RDATA->fadeAlpha);
             else
-                g_pHyprOpenGL->renderTexture(TEXTURE, &windowBox, RDATA->fadeAlpha * RDATA->alpha, rounding, true);
+                g_pHyprOpenGL->renderTexture(TEXTURE, &windowBox, ALPHA, rounding, true);
         }
     } else {
         if (RDATA->blur && RDATA->popup)
-            g_pHyprOpenGL->renderTextureWithBlur(TEXTURE, &windowBox, RDATA->fadeAlpha * RDATA->alpha, surface, rounding, true, RDATA->fadeAlpha);
+            g_pHyprOpenGL->renderTextureWithBlur(TEXTURE, &windowBox, ALPHA, surface, rounding, true, RDATA->fadeAlpha);
         else
-            g_pHyprOpenGL->renderTexture(TEXTURE, &windowBox, RDATA->fadeAlpha * RDATA->alpha, rounding, true);
+            g_pHyprOpenGL->renderTexture(TEXTURE, &windowBox, ALPHA, rounding, true);
     }
 
     if (!g_pHyprRenderer->m_bBlockSurfaceFeedback) {
@@ -1148,25 +1151,6 @@ void CHyprRenderer::renderMonitor(CMonitor* pMonitor) {
         g_pLayoutManager->getCurrentLayout()->recalculateMonitor(pMonitor->ID);
     }
 
-    // gamma stuff
-    if (pMonitor->gammaChanged) {
-        pMonitor->gammaChanged = false;
-
-        const auto PGAMMACTRL = wlr_gamma_control_manager_v1_get_control(g_pCompositor->m_sWLRGammaCtrlMgr, pMonitor->output);
-
-        if (!wlr_gamma_control_v1_apply(PGAMMACTRL, pMonitor->state.wlr())) {
-            Debug::log(ERR, "Could not apply gamma control to {}", pMonitor->szName);
-            return;
-        }
-
-        if (!wlr_output_test_state(pMonitor->output, pMonitor->state.wlr())) {
-            Debug::log(ERR, "Output test failed for setting gamma to {}", pMonitor->szName);
-            // aka rollback
-            wlr_gamma_control_v1_apply(nullptr, pMonitor->state.wlr());
-            wlr_gamma_control_v1_send_failed_and_destroy(PGAMMACTRL);
-        }
-    }
-
     // tearing and DS first
     bool shouldTear = false;
     if (pMonitor->tearingState.nextRenderTorn) {
@@ -1262,9 +1246,7 @@ void CHyprRenderer::renderMonitor(CMonitor* pMonitor) {
     }
 
     // if we have no tracking or full tracking, invalidate the entire monitor
-    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->forceFullFrames > 0 || damageBlinkCleanup > 0 ||
-        pMonitor->isMirror() /* why??? */) {
-
+    if (*PDAMAGETRACKINGMODE == DAMAGE_TRACKING_NONE || *PDAMAGETRACKINGMODE == DAMAGE_TRACKING_MONITOR || pMonitor->forceFullFrames > 0 || damageBlinkCleanup > 0) {
         damage      = {0, 0, (int)pMonitor->vecTransformedSize.x * 10, (int)pMonitor->vecTransformedSize.y * 10};
         finalDamage = damage;
     } else {
@@ -1302,43 +1284,48 @@ void CHyprRenderer::renderMonitor(CMonitor* pMonitor) {
 
     bool renderCursor = true;
 
-    if (!pMonitor->solitaryClient) {
-        if (pMonitor->isMirror()) {
-            g_pHyprOpenGL->blend(false);
-            g_pHyprOpenGL->renderMirrored();
-            g_pHyprOpenGL->blend(true);
-            EMIT_HOOK_EVENT("render", RENDER_POST_MIRROR);
-            renderCursor = false;
-        } else {
-            CBox renderBox = {0, 0, (int)pMonitor->vecPixelSize.x, (int)pMonitor->vecPixelSize.y};
-            renderWorkspace(pMonitor, pMonitor->activeWorkspace, &now, renderBox);
+    if (!finalDamage.empty()) {
+        if (!pMonitor->solitaryClient) {
+            if (pMonitor->isMirror()) {
+                g_pHyprOpenGL->blend(false);
+                g_pHyprOpenGL->renderMirrored();
+                g_pHyprOpenGL->blend(true);
+                EMIT_HOOK_EVENT("render", RENDER_POST_MIRROR);
+                renderCursor = false;
+            } else {
+                CBox renderBox = {0, 0, (int)pMonitor->vecPixelSize.x, (int)pMonitor->vecPixelSize.y};
+                renderWorkspace(pMonitor, pMonitor->activeWorkspace, &now, renderBox);
 
-            renderLockscreen(pMonitor, &now, renderBox);
+                renderLockscreen(pMonitor, &now, renderBox);
 
-            if (pMonitor == g_pCompositor->m_pLastMonitor) {
-                g_pHyprNotificationOverlay->draw(pMonitor);
-                g_pHyprError->draw();
+                if (pMonitor == g_pCompositor->m_pLastMonitor) {
+                    g_pHyprNotificationOverlay->draw(pMonitor);
+                    g_pHyprError->draw();
+                }
+
+                // for drawing the debug overlay
+                if (pMonitor == g_pCompositor->m_vMonitors.front().get() && *PDEBUGOVERLAY == 1) {
+                    renderStartOverlay = std::chrono::high_resolution_clock::now();
+                    g_pDebugOverlay->draw();
+                    endRenderOverlay = std::chrono::high_resolution_clock::now();
+                }
+
+                if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
+                    CBox monrect = {0, 0, pMonitor->vecTransformedSize.x, pMonitor->vecTransformedSize.y};
+                    g_pHyprOpenGL->renderRect(&monrect, CColor(1.0, 0.0, 1.0, 100.0 / 255.0), 0);
+                    damageBlinkCleanup = 1;
+                } else if (*PDAMAGEBLINK) {
+                    damageBlinkCleanup++;
+                    if (damageBlinkCleanup > 3)
+                        damageBlinkCleanup = 0;
+                }
             }
-
-            // for drawing the debug overlay
-            if (pMonitor == g_pCompositor->m_vMonitors.front().get() && *PDEBUGOVERLAY == 1) {
-                renderStartOverlay = std::chrono::high_resolution_clock::now();
-                g_pDebugOverlay->draw();
-                endRenderOverlay = std::chrono::high_resolution_clock::now();
-            }
-
-            if (*PDAMAGEBLINK && damageBlinkCleanup == 0) {
-                CBox monrect = {0, 0, pMonitor->vecTransformedSize.x, pMonitor->vecTransformedSize.y};
-                g_pHyprOpenGL->renderRect(&monrect, CColor(1.0, 0.0, 1.0, 100.0 / 255.0), 0);
-                damageBlinkCleanup = 1;
-            } else if (*PDAMAGEBLINK) {
-                damageBlinkCleanup++;
-                if (damageBlinkCleanup > 3)
-                    damageBlinkCleanup = 0;
-            }
-        }
+        } else
+            g_pHyprRenderer->renderWindow(pMonitor->solitaryClient, pMonitor, &now, false, RENDER_PASS_MAIN /* solitary = no popups */);
     } else {
-        g_pHyprRenderer->renderWindow(pMonitor->solitaryClient, pMonitor, &now, false, RENDER_PASS_MAIN /* solitary = no popups */);
+        sendFrameEventsToWorkspace(pMonitor, pMonitor->activeWorkspace, &now);
+        if (pMonitor->activeSpecialWorkspace)
+            sendFrameEventsToWorkspace(pMonitor, pMonitor->activeSpecialWorkspace, &now);
     }
 
     renderCursor = renderCursor && shouldRenderCursor();
@@ -1432,6 +1419,29 @@ void CHyprRenderer::renderWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace,
     g_pHyprOpenGL->m_RenderData.pWorkspace = pWorkspace;
     renderAllClientsForWorkspace(pMonitor, pWorkspace, now, translate, scale);
     g_pHyprOpenGL->m_RenderData.pWorkspace = nullptr;
+}
+
+void CHyprRenderer::sendFrameEventsToWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now) {
+    for (auto& w : g_pCompositor->m_vWindows) {
+        if (w->isHidden() || !w->m_bIsMapped || w->m_bFadingOut || !w->m_pWLSurface.wlr())
+            continue;
+
+        if (!shouldRenderWindow(w.get(), pMonitor))
+            continue;
+
+        wlr_surface_for_each_surface(
+            w->m_pWLSurface.wlr(), [](wlr_surface* s, int x, int y, void* data) { wlr_surface_send_frame_done(s, (timespec*)data); }, now);
+    }
+
+    for (auto& lsl : pMonitor->m_aLayerSurfaceLayers) {
+        for (auto& ls : lsl) {
+            if (ls->fadingOut || !ls->surface.wlr())
+                continue;
+
+            wlr_surface_for_each_surface(
+                ls->surface.wlr(), [](wlr_surface* s, int x, int y, void* data) { wlr_surface_send_frame_done(s, (timespec*)data); }, now);
+        }
+    }
 }
 
 void CHyprRenderer::setWindowScanoutMode(CWindow* pWindow) {
@@ -1826,11 +1836,24 @@ void CHyprRenderer::damageRegion(const CRegion& rg) {
 
 void CHyprRenderer::damageMirrorsWith(CMonitor* pMonitor, const CRegion& pRegion) {
     for (auto& mirror : pMonitor->mirrors) {
-        Vector2D scale = {mirror->vecSize.x / pMonitor->vecSize.x, mirror->vecSize.y / pMonitor->vecSize.y};
 
-        CRegion  rg{pRegion};
-        wlr_region_scale_xy(rg.pixman(), rg.pixman(), scale.x, scale.y);
-        pMonitor->addDamage(&rg);
+        // transform the damage here, so it won't get clipped by the monitor damage ring
+        auto    monitor  = mirror;
+        auto    mirrored = pMonitor;
+
+        CRegion transformed{pRegion};
+
+        // we want to transform to the same box as in CHyprOpenGLImpl::renderMirrored
+        double scale  = std::min(monitor->vecTransformedSize.x / mirrored->vecTransformedSize.x, monitor->vecTransformedSize.y / mirrored->vecTransformedSize.y);
+        CBox   monbox = {0, 0, mirrored->vecTransformedSize.x * scale, mirrored->vecTransformedSize.y * scale};
+        monbox.x      = (monitor->vecTransformedSize.x - monbox.w) / 2;
+        monbox.y      = (monitor->vecTransformedSize.y - monbox.h) / 2;
+
+        wlr_region_scale(transformed.pixman(), transformed.pixman(), scale);
+        transformed.transform(mirrored->transform, mirrored->vecPixelSize.x * scale, mirrored->vecPixelSize.y * scale);
+        transformed.translate(Vector2D(monbox.x, monbox.y));
+
+        mirror->addDamage(&transformed);
 
         g_pCompositor->scheduleFrameForMonitor(mirror);
     }
@@ -2237,7 +2260,7 @@ bool CHyprRenderer::applyMonitorRule(CMonitor* pMonitor, SMonitorRule* pMonitorR
 
     int x, y;
     wlr_output_transformed_resolution(pMonitor->output, &x, &y);
-    pMonitor->vecSize            = (Vector2D(x, y) / pMonitor->scale).floor();
+    pMonitor->vecSize            = (Vector2D(x, y) / pMonitor->scale).round();
     pMonitor->vecTransformedSize = Vector2D(x, y);
 
     if (pMonitor->createdByUser) {

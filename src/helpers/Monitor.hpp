@@ -10,8 +10,18 @@
 #include "Timer.hpp"
 #include "Region.hpp"
 #include <optional>
+#include "signal/Signal.hpp"
+
+// Enum for the different types of auto directions, e.g. auto-left, auto-up.
+enum class eAutoDirs {
+    DIR_AUTO_UP,
+    DIR_AUTO_DOWN,
+    DIR_AUTO_LEFT,
+    DIR_AUTO_RIGHT
+};
 
 struct SMonitorRule {
+    eAutoDirs           autoDir;
     std::string         name        = "";
     Vector2D            resolution  = Vector2D(1280, 720);
     Vector2D            offset      = Vector2D(0, 0);
@@ -83,7 +93,6 @@ class CMonitor {
     bool                    noFrameSchedule = false;
     bool                    scheduledRecalc = false;
     wl_output_transform     transform       = WL_OUTPUT_TRANSFORM_NORMAL;
-    bool                    gammaChanged    = false;
     float                   xwaylandScale   = 1.f;
     std::array<float, 9>    projMatrix      = {0};
     std::optional<Vector2D> forceSize;
@@ -119,6 +128,12 @@ class CMonitor {
         bool busy                    = false;
         bool frameScheduledWhileBusy = false;
     } tearingState;
+
+    struct {
+        CSignal destroy;
+        CSignal connect;
+        CSignal disconnect;
+    } events;
 
     std::array<std::vector<std::unique_ptr<SLayerSurface>>, 4> m_aLayerSurfaceLayers;
 

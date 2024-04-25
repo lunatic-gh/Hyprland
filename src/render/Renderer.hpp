@@ -89,18 +89,16 @@ class CHyprRenderer {
     DAMAGETRACKINGMODES
     damageTrackingModeFromStr(const std::string&);
 
-    bool                                             attemptDirectScanout(CMonitor*);
-    void                                             setWindowScanoutMode(CWindow*);
-    void                                             initiateManualCrash();
+    bool             attemptDirectScanout(CMonitor*);
+    void             setWindowScanoutMode(CWindow*);
+    void             initiateManualCrash();
 
-    bool                                             m_bCrashingInProgress = false;
-    float                                            m_fCrashingDistort    = 0.5f;
-    wl_event_source*                                 m_pCrashingLoop       = nullptr;
-    wl_event_source*                                 m_pCursorTicker       = nullptr;
+    bool             m_bCrashingInProgress = false;
+    float            m_fCrashingDistort    = 0.5f;
+    wl_event_source* m_pCrashingLoop       = nullptr;
+    wl_event_source* m_pCursorTicker       = nullptr;
 
-    std::vector<std::unique_ptr<STearingController>> m_vTearingControllers;
-
-    CTimer                                           m_tRenderTimer;
+    CTimer           m_tRenderTimer;
 
     struct {
         int                         hotspotX;
@@ -119,6 +117,7 @@ class CHyprRenderer {
     void           renderDragIcon(CMonitor*, timespec*);
     void           renderIMEPopup(CInputPopup*, CMonitor*, timespec*);
     void           renderWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now, const CBox& geometry);
+    void           sendFrameEventsToWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now); // sends frame displayed events but doesn't actually render anything
     void           renderAllClientsForWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now, const Vector2D& translate = {0, 0}, const float& scale = 1.f);
 
     bool           m_bCursorHidden        = false;

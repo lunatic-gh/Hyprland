@@ -133,27 +133,23 @@ namespace HyprlandAPI {
     APICALL Hyprlang::CConfigValue* getConfigValue(HANDLE handle, const std::string& name);
 
     /*
-        Register a static (pointer) callback to a selected event.
-        Pointer must be kept valid until unregisterCallback() is called.
-
-        returns: true on success, false on fail
-    */
-    APICALL bool registerCallbackStatic(HANDLE handle, const std::string& event, HOOK_CALLBACK_FN* fn);
-
-    /*
         Register a dynamic (function) callback to a selected event.
         Pointer will be free'd by Hyprland on unregisterCallback().
 
         returns: a pointer to the newly allocated function. nullptr on fail.
+
+        WARNING: Losing this pointer will unregister the callback!
     */
-    APICALL HOOK_CALLBACK_FN* registerCallbackDynamic(HANDLE handle, const std::string& event, HOOK_CALLBACK_FN fn);
+    APICALL [[nodiscard]] std::shared_ptr<HOOK_CALLBACK_FN> registerCallbackDynamic(HANDLE handle, const std::string& event, HOOK_CALLBACK_FN fn);
 
     /*
         Unregisters a callback. If the callback was dynamic, frees the memory.
 
         returns: true on success, false on fail
+
+        Deprecated: just reset the pointer you received with registerCallbackDynamic
     */
-    APICALL bool unregisterCallback(HANDLE handle, HOOK_CALLBACK_FN* fn);
+    APICALL [[deprecated]] bool unregisterCallback(HANDLE handle, std::shared_ptr<HOOK_CALLBACK_FN> fn);
 
     /*
         Calls a hyprctl command.

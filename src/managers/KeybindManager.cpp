@@ -3,8 +3,11 @@
 #include "debug/Log.hpp"
 #include "helpers/VarList.hpp"
 #include "../config/ConfigValue.hpp"
+#include "TokenManager.hpp"
+#include "../protocols/ShortcutsInhibit.hpp"
 
 #include <regex>
+#include <tuple>
 
 #include <sys/ioctl.h>
 #include <fcntl.h>
@@ -16,6 +19,27 @@
 #elif defined(__DragonFly__) || defined(__FreeBSD__)
 #include <sys/consio.h>
 #endif
+
+static std::vector<std::pair<std::string, std::string>> getHyprlandLaunchEnv() {
+    static auto PINITIALWSTRACKING = CConfigValue<Hyprlang::INT>("misc:initial_workspace_tracking");
+
+    if (!*PINITIALWSTRACKING)
+        return {};
+
+    const auto PMONITOR = g_pCompositor->m_pLastMonitor;
+    if (!PMONITOR || !PMONITOR->activeWorkspace)
+        return {};
+
+    std::vector<std::pair<std::string, std::string>> result;
+
+    result.push_back(std::make_pair<>(
+        "HL_INITIAL_WORKSPACE_TOKEN",
+        g_pTokenManager->registerNewToken(
+            SInitialWorkspaceToken{nullptr, PMONITOR->activeSpecialWorkspace ? PMONITOR->activeSpecialWorkspace->getConfigName() : PMONITOR->activeWorkspace->getConfigName()},
+            std::chrono::months(1337))));
+
+    return result;
+}
 
 CKeybindManager::CKeybindManager() {
     // initialize all dispatchers
@@ -85,7 +109,7 @@ CKeybindManager::CKeybindManager() {
 
     m_tScrollTimer.reset();
 
-    g_pHookSystem->hookDynamic("configReloaded", [this](void* hk, SCallbackInfo& info, std::any param) {
+    static auto P = g_pHookSystem->hookDynamic("configReloaded", [this](void* hk, SCallbackInfo& info, std::any param) {
         // clear cuz realloc'd
         m_pActiveKeybind = nullptr;
         m_vPressedSpecialBinds.clear();
@@ -211,6 +235,7 @@ bool CKeybindManager::ensureMouseBindState() {
 
         g_pCompositor->updateWorkspaceWindows(lastDraggedWindow->workspaceID());
         g_pCompositor->updateWorkspaceSpecialRenderData(lastDraggedWindow->workspaceID());
+        g_pLayoutManager->getCurrentLayout()->recalculateMonitor(lastDraggedWindow->m_iMonitorID);
         g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 
         return true;
@@ -334,14 +359,14 @@ bool CKeybindManager::onKeyEvent(wlr_keyboard_key_event* e, SKeyboard* pKeyboard
         .submapAtPress      = m_szCurrentSelectedSubmap,
     };
 
+    if (m_pActiveKeybindEventSource) {
+        wl_event_source_remove(m_pActiveKeybindEventSource);
+        m_pActiveKeybindEventSource = nullptr;
+        m_pActiveKeybind            = nullptr;
+    }
+
     bool suppressEvent = false;
     if (e->state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-        // clean repeat
-        if (m_pActiveKeybindEventSource) {
-            wl_event_source_remove(m_pActiveKeybindEventSource);
-            m_pActiveKeybindEventSource = nullptr;
-            m_pActiveKeybind            = nullptr;
-        }
 
         m_dPressedKeys.push_back(KEY);
 
@@ -352,12 +377,6 @@ bool CKeybindManager::onKeyEvent(wlr_keyboard_key_event* e, SKeyboard* pKeyboard
 
         m_dPressedKeys.back().sent = !suppressEvent;
     } else { // key release
-        // clean repeat
-        if (m_pActiveKeybindEventSource) {
-            wl_event_source_remove(m_pActiveKeybindEventSource);
-            m_pActiveKeybindEventSource = nullptr;
-            m_pActiveKeybind            = nullptr;
-        }
 
         bool foundInPressedKeys = false;
         for (auto it = m_dPressedKeys.begin(); it != m_dPressedKeys.end();) {
@@ -395,6 +414,12 @@ bool CKeybindManager::onAxisEvent(wlr_pointer_axis_event* e) {
 
     m_tScrollTimer.reset();
 
+    if (m_pActiveKeybindEventSource) {
+        wl_event_source_remove(m_pActiveKeybindEventSource);
+        m_pActiveKeybindEventSource = nullptr;
+        m_pActiveKeybind            = nullptr;
+    }
+
     bool found = false;
     if (e->source == WL_POINTER_AXIS_SOURCE_WHEEL && e->orientation == WL_POINTER_AXIS_VERTICAL_SCROLL) {
         if (e->delta < 0)
@@ -431,6 +456,12 @@ bool CKeybindManager::onMouseEvent(wlr_pointer_button_event* e) {
         .keyName            = KEY_NAME,
         .modmaskAtPressTime = MODS,
     };
+
+    if (m_pActiveKeybindEventSource) {
+        wl_event_source_remove(m_pActiveKeybindEventSource);
+        m_pActiveKeybindEventSource = nullptr;
+        m_pActiveKeybind            = nullptr;
+    }
 
     if (e->state == WL_POINTER_BUTTON_STATE_PRESSED) {
         m_dPressedKeys.push_back(KEY);
@@ -509,13 +540,9 @@ bool CKeybindManager::handleKeybinds(const uint32_t modmask, const SPressedKeyWi
 
     static auto PDISABLEINHIBIT = CConfigValue<Hyprlang::INT>("binds:disable_keybind_grabbing");
 
-    if (!*PDISABLEINHIBIT && !m_lShortcutInhibitors.empty()) {
-        for (auto& i : m_lShortcutInhibitors) {
-            if (i.pWlrInhibitor->surface == g_pCompositor->m_pLastFocus) {
-                Debug::log(LOG, "Keybind handling is disabled due to an inhibitor for surface {:x}", (uintptr_t)i.pWlrInhibitor->surface);
-                return false;
-            }
-        }
+    if (!*PDISABLEINHIBIT && PROTO::shortcutsInhibit->isInhibited()) {
+        Debug::log(LOG, "Keybind handling is disabled due to an inhibitor");
+        return false;
     }
 
     for (auto& k : m_lKeybinds) {
@@ -767,7 +794,9 @@ void CKeybindManager::spawn(std::string args) {
 uint64_t CKeybindManager::spawnRaw(std::string args) {
     Debug::log(LOG, "Executing {}", args);
 
-    int socket[2];
+    const auto HLENV = getHyprlandLaunchEnv();
+
+    int        socket[2];
     if (pipe(socket) != 0) {
         Debug::log(LOG, "Unable to create pipe for fork");
     }
@@ -790,6 +819,9 @@ uint64_t CKeybindManager::spawnRaw(std::string args) {
         grandchild = fork();
         if (grandchild == 0) {
             // run in grandchild
+            for (auto& e : HLENV) {
+                setenv(e.first.c_str(), e.second.c_str(), 1);
+            }
             close(socket[0]);
             close(socket[1]);
             execl("/bin/sh", "/bin/sh", "-c", args.c_str(), nullptr);
@@ -872,6 +904,7 @@ static void toggleActiveFloatingCore(std::string args, std::optional<bool> float
     }
     g_pCompositor->updateWorkspaceWindows(PWINDOW->workspaceID());
     g_pCompositor->updateWorkspaceSpecialRenderData(PWINDOW->workspaceID());
+    g_pLayoutManager->getCurrentLayout()->recalculateMonitor(PWINDOW->m_iMonitorID);
     g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 }
 

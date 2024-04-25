@@ -12,6 +12,9 @@
 #include "../macros.hpp"
 #include "../managers/XWaylandManager.hpp"
 #include "DesktopTypes.hpp"
+#include "../helpers/signal/Signal.hpp"
+
+class CWindow;
 
 enum eIdleInhibitMode {
     IDLEINHIBIT_NONE = 0,
@@ -187,6 +190,11 @@ struct SWindowRule {
     std::string szWorkspace   = ""; // empty means any
 };
 
+struct SInitialWorkspaceToken {
+    CWindow*    primaryOwner = nullptr;
+    std::string workspace;
+};
+
 class CWindow {
   public:
     CWindow();
@@ -215,6 +223,10 @@ class CWindow {
     // DYNLISTENER(newSubsurfaceWindow);
 
     CWLSurface m_pWLSurface;
+
+    struct {
+        CSignal destroy;
+    } events;
 
     union {
         wlr_xdg_surface*      xdg;
@@ -316,9 +328,6 @@ class CWindow {
     // for proper cycling. While cycling we can't just move the pointers, so we need to keep track of the last cycled window.
     CWindow* m_pLastCycledWindow = nullptr;
 
-    // Foreign Toplevel proto
-    wlr_foreign_toplevel_handle_v1* m_phForeignToplevel = nullptr;
-
     // Window decorations
     std::deque<std::unique_ptr<IHyprWindowDecoration>> m_dWindowDecorations;
     std::vector<IHyprWindowDecoration*>                m_vDecosToRemove;
@@ -352,6 +361,9 @@ class CWindow {
     // for idle inhibiting windows
     eIdleInhibitMode m_eIdleInhibitMode = IDLEINHIBIT_NONE;
 
+    // initial token. Will be unregistered on workspace change or timeout of 2 minutes
+    std::string m_szInitialWorkspaceToken = "";
+
     // for groups
     struct SGroupData {
         CWindow* pNextWindow = nullptr; // nullptr means no grouping. Self means single group.
@@ -383,8 +395,6 @@ class CWindow {
     pid_t                    getPID();
     IHyprWindowDecoration*   getDecorationByType(eDecorationType);
     void                     removeDecorationByType(eDecorationType);
-    void                     createToplevelHandle();
-    void                     destroyToplevelHandle();
     void                     updateToplevel();
     void                     updateSurfaceScaleTransformDetails();
     void                     moveToWorkspace(PHLWORKSPACE);
@@ -405,6 +415,7 @@ class CWindow {
     bool                     visibleOnMonitor(CMonitor* pMonitor);
     int                      workspaceID();
     bool                     onSpecialWorkspace();
+    void                     activate();
 
     int                      getRealBorderSize();
     void                     updateSpecialRenderData();
@@ -431,6 +442,9 @@ class CWindow {
     void                     switchWithWindowInGroup(CWindow* pWindow);
     void                     setAnimationsToMove();
     void                     onWorkspaceAnimUpdate();
+
+    //
+    std::unordered_map<std::string, std::string> getEnv();
 
   private:
     // For hidden windows and stuff

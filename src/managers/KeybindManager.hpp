@@ -32,9 +32,12 @@ struct SKeybind {
 
 enum eFocusWindowMode {
     MODE_CLASS_REGEX = 0,
+    MODE_INITIAL_CLASS_REGEX,
     MODE_TITLE_REGEX,
+    MODE_INITIAL_TITLE_REGEX,
     MODE_ADDRESS,
-    MODE_PID
+    MODE_PID,
+    MODE_ACTIVE_WINDOW
 };
 
 struct SPressedKeyWithMods {
@@ -78,7 +81,6 @@ class CKeybindManager {
     bool                                                              m_bGroupsLocked = false;
 
     std::list<SKeybind>                                               m_lKeybinds;
-    std::list<SShortcutInhibitor>                                     m_lShortcutInhibitors;
 
   private:
     std::deque<SPressedKeyWithMods> m_dPressedKeys;
