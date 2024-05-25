@@ -7,7 +7,7 @@
 constexpr const char* SHAPE_NAMES[] = {
     "invalid",
     "default",
-    "context_menu",
+    "context-menu",
     "help",
     "pointer",
     "progress",
@@ -15,31 +15,31 @@ constexpr const char* SHAPE_NAMES[] = {
     "cell",
     "crosshair",
     "text",
-    "vertical_text",
+    "vertical-text",
     "alias",
     "copy",
     "move",
-    "no_drop",
-    "not_allowed",
+    "no-drop",
+    "not-allowed",
     "grab",
     "grabbing",
-    "e_resize",
-    "n_resize",
-    "ne_resize",
-    "nw_resize",
-    "s_resize",
-    "se_resize",
-    "sw_resize",
-    "w_resize",
-    "ew_resize",
-    "ns_resize",
-    "nesw_resize",
-    "nwse_resize",
-    "col_resize",
-    "row_resize",
-    "all_scroll",
-    "zoom_in",
-    "zoom_out",
+    "e-resize",
+    "n-resize",
+    "ne-resize",
+    "nw-resize",
+    "s-resize",
+    "se-resize",
+    "sw-resize",
+    "w-resize",
+    "ew-resize",
+    "ns-resize",
+    "nesw-resize",
+    "nwse-resize",
+    "col-resize",
+    "row-resize",
+    "all-scroll",
+    "zoom-in",
+    "zoom-out",
 };
 // clang-format on
 
@@ -48,11 +48,11 @@ CCursorShapeProtocol::CCursorShapeProtocol(const wl_interface* iface, const int&
 }
 
 void CCursorShapeProtocol::onManagerResourceDestroy(wl_resource* res) {
-    std::erase_if(m_vManagers, [&](const auto& other) { return other->resource() == res; });
+    std::erase_if(m_vManagers, [res](const auto& other) { return other->resource() == res; });
 }
 
 void CCursorShapeProtocol::onDeviceResourceDestroy(wl_resource* res) {
-    m_mDevices.erase(res);
+    std::erase_if(m_vDevices, [res](const auto& other) { return other->resource() == res; });
 }
 
 void CCursorShapeProtocol::bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id) {
@@ -73,14 +73,8 @@ void CCursorShapeProtocol::onGetTabletToolV2(CWpCursorShapeManagerV1* pMgr, uint
 }
 
 void CCursorShapeProtocol::createCursorShapeDevice(CWpCursorShapeManagerV1* pMgr, uint32_t id, wl_resource* resource) {
-    if (m_mDevices.contains(resource)) {
-        LOGM(ERR, "CursorShape device already exists for {:x}", (uintptr_t)resource);
-        wl_resource_post_error(resource, 0, "Device already exists");
-        return;
-    }
-
-    const auto CLIENT   = wl_resource_get_client(pMgr->resource());
-    const auto RESOURCE = m_mDevices.emplace(resource, std::make_shared<CWpCursorShapeDeviceV1>(CLIENT, wl_resource_get_version(pMgr->resource()), id)).first->second.get();
+    const auto CLIENT   = pMgr->client();
+    const auto RESOURCE = m_vDevices.emplace_back(makeShared<CWpCursorShapeDeviceV1>(CLIENT, pMgr->version(), id));
     RESOURCE->setOnDestroy([this](CWpCursorShapeDeviceV1* p) { this->onDeviceResourceDestroy(p->resource()); });
 
     RESOURCE->setDestroy([this](CWpCursorShapeDeviceV1* p) { this->onDeviceResourceDestroy(p->resource()); });
@@ -89,7 +83,7 @@ void CCursorShapeProtocol::createCursorShapeDevice(CWpCursorShapeManagerV1* pMgr
 
 void CCursorShapeProtocol::onSetShape(CWpCursorShapeDeviceV1* pMgr, uint32_t serial, wpCursorShapeDeviceV1Shape shape) {
     if ((uint32_t)shape == 0 || (uint32_t)shape > sizeof(SHAPE_NAMES)) {
-        wl_resource_post_error(pMgr->resource(), WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE, "The shape is invalid");
+        pMgr->error(WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE, "The shape is invalid");
         return;
     }
 

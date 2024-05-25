@@ -43,31 +43,29 @@ class CHyprRenderer {
     CHyprRenderer();
 
     void                            renderMonitor(CMonitor* pMonitor);
-    void                            outputMgrApplyTest(wlr_output_configuration_v1*, bool);
     void                            arrangeLayersForMonitor(const int&);
     void                            damageSurface(wlr_surface*, double, double, double scale = 1.0);
-    void                            damageWindow(CWindow*, bool forceFull = false);
+    void                            damageWindow(PHLWINDOW, bool forceFull = false);
     void                            damageBox(CBox*);
     void                            damageBox(const int& x, const int& y, const int& w, const int& h);
     void                            damageRegion(const CRegion&);
     void                            damageMonitor(CMonitor*);
     void                            damageMirrorsWith(CMonitor*, const CRegion&);
     bool                            applyMonitorRule(CMonitor*, SMonitorRule*, bool force = false);
-    bool                            shouldRenderWindow(CWindow*, CMonitor*);
-    bool                            shouldRenderWindow(CWindow*);
+    bool                            shouldRenderWindow(PHLWINDOW, CMonitor*);
+    bool                            shouldRenderWindow(PHLWINDOW);
     void                            ensureCursorRenderingMode();
     bool                            shouldRenderCursor();
     void                            setCursorHidden(bool hide);
-    void                            calculateUVForSurface(CWindow*, wlr_surface*, bool main = false, const Vector2D& projSize = {}, bool fixMisalignedFSV1 = false);
+    void                            calculateUVForSurface(PHLWINDOW, wlr_surface*, bool main = false, const Vector2D& projSize = {}, bool fixMisalignedFSV1 = false);
     std::tuple<float, float, float> getRenderTimes(CMonitor* pMonitor); // avg max min
     void                            renderLockscreen(CMonitor* pMonitor, timespec* now, const CBox& geometry);
     void                            setOccludedForBackLayers(CRegion& region, PHLWORKSPACE pWorkspace);
     void                            setOccludedForMainWorkspace(CRegion& region, PHLWORKSPACE pWorkspace); // TODO: merge occlusion methods
     bool                            canSkipBackBufferClear(CMonitor* pMonitor);
     void                            recheckSolitaryForMonitor(CMonitor* pMonitor);
-    void                            setCursorSurface(wlr_surface* surf, int hotspotX, int hotspotY, bool force = false);
+    void                            setCursorSurface(CWLSurface* surf, int hotspotX, int hotspotY, bool force = false);
     void                            setCursorFromName(const std::string& name, bool force = false);
-    void                            renderSoftwareCursors(CMonitor* pMonitor, const CRegion& damage, std::optional<Vector2D> overridePos = {});
     void                            onRenderbufferDestroy(CRenderbuffer* rb);
     CRenderbuffer*                  getCurrentRBO();
     bool                            isNvidia();
@@ -76,21 +74,20 @@ class CHyprRenderer {
 
     // if RENDER_MODE_NORMAL, provided damage will be written to.
     // otherwise, it will be the one used.
-    bool      beginRender(CMonitor* pMonitor, CRegion& damage, eRenderMode mode = RENDER_MODE_NORMAL, wlr_buffer* buffer = nullptr, CFramebuffer* fb = nullptr);
-    void      endRender();
+    bool beginRender(CMonitor* pMonitor, CRegion& damage, eRenderMode mode = RENDER_MODE_NORMAL, wlr_buffer* buffer = nullptr, CFramebuffer* fb = nullptr, bool simple = false);
+    void endRender();
 
-    bool      m_bBlockSurfaceFeedback  = false;
-    bool      m_bRenderingSnapshot     = false;
-    CWindow*  m_pLastScanout           = nullptr;
-    CMonitor* m_pMostHzMonitor         = nullptr;
-    bool      m_bDirectScanoutBlocked  = false;
-    bool      m_bSoftwareCursorsLocked = false;
+    bool m_bBlockSurfaceFeedback = false;
+    bool m_bRenderingSnapshot    = false;
+    PHLWINDOWREF m_pLastScanout;
+    CMonitor*    m_pMostHzMonitor        = nullptr;
+    bool         m_bDirectScanoutBlocked = false;
 
     DAMAGETRACKINGMODES
     damageTrackingModeFromStr(const std::string&);
 
     bool             attemptDirectScanout(CMonitor*);
-    void             setWindowScanoutMode(CWindow*);
+    void             setWindowScanoutMode(PHLWINDOW);
     void             initiateManualCrash();
 
     bool             m_bCrashingInProgress = false;
@@ -101,18 +98,18 @@ class CHyprRenderer {
     CTimer           m_tRenderTimer;
 
     struct {
-        int                         hotspotX;
-        int                         hotspotY;
-        std::optional<wlr_surface*> surf = nullptr;
-        std::string                 name;
+        int                        hotspotX;
+        int                        hotspotY;
+        std::optional<CWLSurface*> surf = nullptr;
+        std::string                name;
     } m_sLastCursorData;
 
   private:
-    void           arrangeLayerArray(CMonitor*, const std::vector<std::unique_ptr<SLayerSurface>>&, bool, CBox*);
+    void           arrangeLayerArray(CMonitor*, const std::vector<PHLLSREF>&, bool, CBox*);
     void           renderWorkspaceWindowsFullscreen(CMonitor*, PHLWORKSPACE, timespec*); // renders workspace windows (fullscreen) (tiled, floating, pinned, but no special)
     void           renderWorkspaceWindows(CMonitor*, PHLWORKSPACE, timespec*);           // renders workspace windows (no fullscreen) (tiled, floating, pinned, but no special)
-    void           renderWindow(CWindow*, CMonitor*, timespec*, bool, eRenderPassMode, bool ignorePosition = false, bool ignoreAllGeometry = false);
-    void           renderLayer(SLayerSurface*, CMonitor*, timespec*, bool popups = false);
+    void           renderWindow(PHLWINDOW, CMonitor*, timespec*, bool, eRenderPassMode, bool ignorePosition = false, bool ignoreAllGeometry = false);
+    void           renderLayer(PHLLS, CMonitor*, timespec*, bool popups = false);
     void           renderSessionLockSurface(SSessionLockSurface*, CMonitor*, timespec*);
     void           renderDragIcon(CMonitor*, timespec*);
     void           renderIMEPopup(CInputPopup*, CMonitor*, timespec*);
@@ -140,6 +137,7 @@ class CHyprRenderer {
     friend class CHyprOpenGLImpl;
     friend class CToplevelExportProtocolManager;
     friend class CInputManager;
+    friend class CPointerManager;
 };
 
 inline std::unique_ptr<CHyprRenderer> g_pHyprRenderer;

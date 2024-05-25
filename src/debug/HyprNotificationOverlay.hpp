@@ -39,6 +39,7 @@ struct SNotification {
 class CHyprNotificationOverlay {
   public:
     CHyprNotificationOverlay();
+    ~CHyprNotificationOverlay();
 
     void draw(CMonitor* pMonitor);
     void addNotification(const std::string& text, const CColor& color, const float timeMs, const eIcons icon = ICON_NONE, const float fontSize = 13.f);
@@ -58,9 +59,6 @@ class CHyprNotificationOverlay {
     Vector2D                                   m_vecLastSize  = Vector2D(-1, -1);
 
     CTexture                                   m_tTexture;
-
-    eIconBackend                               m_eIconBackend   = ICONS_BACKEND_NONE;
-    std::string                                m_szIconFontName = "Sans";
 };
 
 inline std::unique_ptr<CHyprNotificationOverlay> g_pHyprNotificationOverlay;

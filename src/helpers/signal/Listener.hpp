@@ -3,6 +3,7 @@
 #include <any>
 #include <memory>
 #include <functional>
+#include "../../macros.hpp"
 
 class CSignal;
 
@@ -21,4 +22,20 @@ class CSignalListener {
     std::function<void(std::any)> m_fHandler;
 };
 
-typedef std::shared_ptr<CSignalListener> CHyprSignalListener;
+typedef SP<CSignalListener> CHyprSignalListener;
+
+class CStaticSignalListener {
+  public:
+    CStaticSignalListener(std::function<void(void*, std::any)> handler, void* owner);
+
+    CStaticSignalListener(CStaticSignalListener&&)       = delete;
+    CStaticSignalListener(CStaticSignalListener&)        = delete;
+    CStaticSignalListener(const CStaticSignalListener&)  = delete;
+    CStaticSignalListener(const CStaticSignalListener&&) = delete;
+
+    void emit(std::any data);
+
+  private:
+    void*                                m_pOwner = nullptr;
+    std::function<void(void*, std::any)> m_fHandler;
+};

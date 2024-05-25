@@ -11,12 +11,20 @@ void CSignal::emit(std::any data) {
             dirty = true;
     }
 
+    for (auto& l : m_vStaticListeners) {
+        l->emit(data);
+    }
+
     if (dirty)
-        std::erase_if(m_vListeners, [](const auto& other) { return !other.lock(); });
+        std::erase_if(m_vListeners, [](const auto& other) { return other.expired(); });
 }
 
 CHyprSignalListener CSignal::registerListener(std::function<void(std::any)> handler) {
-    CHyprSignalListener listener = std::make_shared<CSignalListener>(handler);
-    m_vListeners.emplace_back(std::weak_ptr<CSignalListener>(listener));
+    CHyprSignalListener listener = makeShared<CSignalListener>(handler);
+    m_vListeners.emplace_back(WP<CSignalListener>(listener));
     return listener;
+}
+
+void CSignal::registerStaticListener(std::function<void(void*, std::any)> handler, void* owner) {
+    m_vStaticListeners.emplace_back(std::make_unique<CStaticSignalListener>(handler, owner));
 }

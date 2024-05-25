@@ -1,39 +1,49 @@
 #include "InputManager.hpp"
 #include "../../Compositor.hpp"
 #include "../../protocols/IdleInhibit.hpp"
+#include "../../protocols/IdleNotify.hpp"
 
 void CInputManager::newIdleInhibitor(std::any inhibitor) {
     const auto PINHIBIT = m_vIdleInhibitors.emplace_back(std::make_unique<SIdleInhibitor>()).get();
-    PINHIBIT->inhibitor = std::any_cast<std::shared_ptr<CIdleInhibitor>>(inhibitor);
+    PINHIBIT->inhibitor = std::any_cast<SP<CIdleInhibitor>>(inhibitor);
 
     Debug::log(LOG, "New idle inhibitor registered for surface {:x}", (uintptr_t)PINHIBIT->inhibitor->surface);
 
-    PINHIBIT->inhibitor->listeners.destroy = PINHIBIT->inhibitor->resource.lock()->events.destroy.registerListener([this, PINHIBIT](std::any data) {
+    PINHIBIT->inhibitor->listeners.destroy = PINHIBIT->inhibitor->resource->events.destroy.registerListener([this, PINHIBIT](std::any data) {
         std::erase_if(m_vIdleInhibitors, [PINHIBIT](const auto& other) { return other.get() == PINHIBIT; });
         recheckIdleInhibitorStatus();
     });
 
-    const auto PWINDOW = g_pCompositor->getWindowFromSurface(PINHIBIT->inhibitor->surface);
+    auto WLSurface = CWLSurface::surfaceFromWlr(PINHIBIT->inhibitor->surface);
 
-    if (PWINDOW) {
-        PINHIBIT->pWindow               = PWINDOW;
-        PINHIBIT->windowDestroyListener = PWINDOW->events.destroy.registerListener([PINHIBIT](std::any data) {
-            Debug::log(WARN, "Inhibitor got its window destroyed before its inhibitor resource.");
-            PINHIBIT->pWindow = nullptr;
-        });
-    } else
-        Debug::log(WARN, "Inhibitor is for no window?");
+    if (!WLSurface) {
+        Debug::log(LOG, "Inhibitor has no HL Surface attached to it, likely meaning it's a non-desktop element. Assuming it's visible.");
+        PINHIBIT->nonDesktop = true;
+        recheckIdleInhibitorStatus();
+        return;
+    }
+
+    PINHIBIT->surfaceDestroyListener = WLSurface->events.destroy.registerListener(
+        [this, PINHIBIT](std::any data) { std::erase_if(m_vIdleInhibitors, [PINHIBIT](const auto& other) { return other.get() == PINHIBIT; }); });
+
     recheckIdleInhibitorStatus();
 }
 
 void CInputManager::recheckIdleInhibitorStatus() {
 
     for (auto& ii : m_vIdleInhibitors) {
-        if (!ii->pWindow) {
-            g_pCompositor->setIdleActivityInhibit(false);
+        if (ii->nonDesktop) {
+            PROTO::idle->setInhibit(true);
             return;
-        } else if (g_pHyprRenderer->shouldRenderWindow(ii->pWindow)) {
-            g_pCompositor->setIdleActivityInhibit(false);
+        }
+
+        auto WLSurface = CWLSurface::surfaceFromWlr(ii->inhibitor->surface);
+
+        if (!WLSurface)
+            continue;
+
+        if (WLSurface->visible()) {
+            PROTO::idle->setInhibit(true);
             return;
         }
     }
@@ -44,21 +54,21 @@ void CInputManager::recheckIdleInhibitorStatus() {
             continue;
 
         if (w->m_eIdleInhibitMode == IDLEINHIBIT_ALWAYS) {
-            g_pCompositor->setIdleActivityInhibit(false);
+            PROTO::idle->setInhibit(true);
             return;
         }
 
-        if (w->m_eIdleInhibitMode == IDLEINHIBIT_FOCUS && g_pCompositor->isWindowActive(w.get())) {
-            g_pCompositor->setIdleActivityInhibit(false);
+        if (w->m_eIdleInhibitMode == IDLEINHIBIT_FOCUS && g_pCompositor->isWindowActive(w)) {
+            PROTO::idle->setInhibit(true);
             return;
         }
 
         if (w->m_eIdleInhibitMode == IDLEINHIBIT_FULLSCREEN && w->m_bIsFullscreen && g_pCompositor->isWorkspaceVisible(w->m_pWorkspace)) {
-            g_pCompositor->setIdleActivityInhibit(false);
+            PROTO::idle->setInhibit(true);
             return;
         }
     }
 
-    g_pCompositor->setIdleActivityInhibit(true);
+    PROTO::idle->setInhibit(false);
     return;
 }

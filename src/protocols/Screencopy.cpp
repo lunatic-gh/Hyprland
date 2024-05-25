@@ -1,5 +1,7 @@
 #include "Screencopy.hpp"
 #include "../Compositor.hpp"
+#include "../managers/eventLoop/EventLoopManager.hpp"
+#include "../managers/PointerManager.hpp"
 
 #include <algorithm>
 
@@ -34,6 +36,20 @@ CScreencopyProtocolManager::CScreencopyProtocolManager() {
     wl_display_add_destroy_listener(g_pCompositor->m_sWLDisplay, &m_liDisplayDestroy);
 
     Debug::log(LOG, "ScreencopyProtocolManager started successfully!");
+
+    m_pSoftwareCursorTimer = makeShared<CEventLoopTimer>(
+        std::nullopt,
+        [this](SP<CEventLoopTimer> self, void* data) {
+            // TODO: make it per-monitor
+            for (auto& m : g_pCompositor->m_vMonitors) {
+                g_pPointerManager->unlockSoftwareForMonitor(m);
+            }
+            m_bTimerArmed = false;
+
+            Debug::log(LOG, "[screencopy] Releasing software cursor lock");
+        },
+        nullptr);
+    g_pEventLoopManager->addTimer(m_pSoftwareCursorTimer);
 }
 
 static void handleCaptureOutput(wl_client* client, wl_resource* resource, uint32_t frame, int32_t overlay_cursor, wl_resource* output) {
@@ -352,8 +368,18 @@ void CScreencopyProtocolManager::copyFrame(wl_client* client, wl_resource* resou
     m_vFramesAwaitingWrite.emplace_back(PFRAME);
 
     g_pHyprRenderer->m_bDirectScanoutBlocked = true;
-    if (PFRAME->overlayCursor)
-        g_pHyprRenderer->m_bSoftwareCursorsLocked = true;
+    if (PFRAME->overlayCursor && !PFRAME->lockedSWCursors) {
+        PFRAME->lockedSWCursors = true;
+        // TODO: make it per-monitor
+        if (!m_bTimerArmed) {
+            for (auto& m : g_pCompositor->m_vMonitors) {
+                g_pPointerManager->lockSoftwareForMonitor(m);
+            }
+            m_bTimerArmed = true;
+            Debug::log(LOG, "[screencopy] Locking sw cursors due to screensharing");
+        }
+        m_pSoftwareCursorTimer->updateTimeout(std::chrono::seconds(1));
+    }
 
     if (!PFRAME->withDamage)
         g_pHyprRenderer->damageMonitor(PFRAME->pMonitor);
@@ -393,17 +419,8 @@ void CScreencopyProtocolManager::shareAllFrames(CMonitor* pMonitor) {
         removeFrame(f);
     }
 
-    g_pHyprRenderer->m_bSoftwareCursorsLocked = false;
-
     if (m_vFramesAwaitingWrite.empty()) {
         g_pHyprRenderer->m_bDirectScanoutBlocked = false;
-    } else {
-        for (auto& f : m_vFramesAwaitingWrite) {
-            if (f->overlayCursor) {
-                g_pHyprRenderer->m_bSoftwareCursorsLocked = true;
-                break;
-            }
-        }
     }
 }
 
@@ -477,7 +494,7 @@ bool CScreencopyProtocolManager::copyFrameShm(SScreencopyFrame* frame, timespec*
     CFramebuffer fb;
     fb.alloc(frame->box.w, frame->box.h, g_pHyprRenderer->isNvidia() ? DRM_FORMAT_XBGR8888 : frame->pMonitor->drmFormat);
 
-    if (!g_pHyprRenderer->beginRender(frame->pMonitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &fb)) {
+    if (!g_pHyprRenderer->beginRender(frame->pMonitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, &fb, true)) {
         wlr_texture_destroy(sourceTex);
         wlr_buffer_end_data_ptr_access(frame->buffer);
         return false;
@@ -540,7 +557,7 @@ bool CScreencopyProtocolManager::copyFrameDmabuf(SScreencopyFrame* frame) {
 
     CRegion fakeDamage = {0, 0, INT16_MAX, INT16_MAX};
 
-    if (!g_pHyprRenderer->beginRender(frame->pMonitor, fakeDamage, RENDER_MODE_TO_BUFFER, frame->buffer))
+    if (!g_pHyprRenderer->beginRender(frame->pMonitor, fakeDamage, RENDER_MODE_TO_BUFFER, frame->buffer, nullptr, true))
         return false;
 
     CBox monbox = CBox{0, 0, frame->pMonitor->vecPixelSize.x, frame->pMonitor->vecPixelSize.y}

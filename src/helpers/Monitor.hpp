@@ -13,7 +13,8 @@
 #include "signal/Signal.hpp"
 
 // Enum for the different types of auto directions, e.g. auto-left, auto-up.
-enum class eAutoDirs {
+enum eAutoDirs {
+    DIR_AUTO_NONE = 0, /* None will be treated as right. */
     DIR_AUTO_UP,
     DIR_AUTO_DOWN,
     DIR_AUTO_LEFT,
@@ -21,7 +22,7 @@ enum class eAutoDirs {
 };
 
 struct SMonitorRule {
-    eAutoDirs           autoDir;
+    eAutoDirs           autoDir     = DIR_AUTO_NONE;
     std::string         name        = "";
     Vector2D            resolution  = Vector2D(1280, 720);
     Vector2D            offset      = Vector2D(0, 0);
@@ -96,6 +97,7 @@ class CMonitor {
     float                   xwaylandScale   = 1.f;
     std::array<float, 9>    projMatrix      = {0};
     std::optional<Vector2D> forceSize;
+    wlr_output_mode*        currentMode = nullptr;
 
     bool                    dpmsStatus       = true;
     bool                    vrrActive        = false; // this can be TRUE even if VRR is not active in the case that this display does not support it.
@@ -113,12 +115,14 @@ class CMonitor {
 
     SMonitorRule            activeMonitorRule;
 
+    WP<CMonitor>            self;
+
     // mirroring
     CMonitor*              pMirrorOf = nullptr;
     std::vector<CMonitor*> mirrors;
 
     // for tearing
-    CWindow* solitaryClient = nullptr;
+    PHLWINDOWREF solitaryClient;
 
     struct {
         bool canTear         = false;
@@ -133,9 +137,11 @@ class CMonitor {
         CSignal destroy;
         CSignal connect;
         CSignal disconnect;
+        CSignal dpmsChanged;
+        CSignal modeChanged;
     } events;
 
-    std::array<std::vector<std::unique_ptr<SLayerSurface>>, 4> m_aLayerSurfaceLayers;
+    std::array<std::vector<PHLLSREF>, 4> m_aLayerSurfaceLayers;
 
     DYNLISTENER(monitorFrame);
     DYNLISTENER(monitorDestroy);
@@ -144,6 +150,7 @@ class CMonitor {
     DYNLISTENER(monitorNeedsFrame);
     DYNLISTENER(monitorCommit);
     DYNLISTENER(monitorBind);
+    DYNLISTENER(monitorPresented);
 
     // methods
     void     onConnect(bool noRule);
@@ -164,6 +171,8 @@ class CMonitor {
     void     updateMatrix();
     int64_t  activeWorkspaceID();
     int64_t  activeSpecialWorkspaceID();
+    CBox     logicalBox();
+    void     updateGlobal();
 
     bool     m_bEnabled             = false;
     bool     m_bRenderingInitPassed = false;

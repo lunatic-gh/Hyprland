@@ -2,17 +2,18 @@
 #include "../Compositor.hpp"
 #include "../config/ConfigValue.hpp"
 
-PHLWORKSPACE CWorkspace::create(int id, int monitorID, std::string name, bool special) {
-    PHLWORKSPACE workspace = std::make_shared<CWorkspace>(id, monitorID, name, special);
+PHLWORKSPACE CWorkspace::create(int id, int monitorID, std::string name, bool special, bool isEmtpy) {
+    PHLWORKSPACE workspace = makeShared<CWorkspace>(id, monitorID, name, special, isEmtpy);
     workspace->init(workspace);
     return workspace;
 }
 
-CWorkspace::CWorkspace(int id, int monitorID, std::string name, bool special) {
+CWorkspace::CWorkspace(int id, int monitorID, std::string name, bool special, bool isEmtpy) {
     m_iMonitorID          = monitorID;
     m_iID                 = id;
     m_szName              = name;
     m_bIsSpecialWorkspace = special;
+    m_bWasCreatedEmtpy    = isEmtpy;
 }
 
 void CWorkspace::init(PHLWORKSPACE self) {
@@ -33,10 +34,10 @@ void CWorkspace::init(PHLWORKSPACE self) {
         m_szName = RULEFORTHIS.defaultName.value();
 
     m_pFocusedWindowHook = g_pHookSystem->hookDynamic("closeWindow", [this](void* self, SCallbackInfo& info, std::any param) {
-        const auto PWINDOW = std::any_cast<CWindow*>(param);
+        const auto PWINDOW = std::any_cast<PHLWINDOW>(param);
 
-        if (PWINDOW == m_pLastFocusedWindow)
-            m_pLastFocusedWindow = nullptr;
+        if (PWINDOW == m_pLastFocusedWindow.lock())
+            m_pLastFocusedWindow.reset();
     });
 
     m_bInert = false;
@@ -44,8 +45,9 @@ void CWorkspace::init(PHLWORKSPACE self) {
     const auto WORKSPACERULE = g_pConfigManager->getWorkspaceRuleFor(self);
     m_bPersistent            = WORKSPACERULE.isPersistent;
 
-    if (auto cmd = WORKSPACERULE.onCreatedEmptyRunCmd)
-        g_pKeybindManager->spawn(*cmd);
+    if (self->m_bWasCreatedEmtpy)
+        if (auto cmd = WORKSPACERULE.onCreatedEmptyRunCmd)
+            g_pKeybindManager->spawn(*cmd);
 
     g_pEventManager->postEvent({"createworkspace", m_szName});
     g_pEventManager->postEvent({"createworkspacev2", std::format("{},{}", m_iID, m_szName)});
@@ -75,7 +77,7 @@ void CWorkspace::startAnim(bool in, bool left, bool instant) {
     // set floating windows offset callbacks
     m_vRenderOffset.setUpdateCallback([&](void*) {
         for (auto& w : g_pCompositor->m_vWindows) {
-            if (!g_pCompositor->windowValidMapped(w.get()) || w->workspaceID() != m_iID)
+            if (!validMapped(w) || w->workspaceID() != m_iID)
                 continue;
 
             w->onWorkspaceAnimUpdate();
@@ -182,11 +184,11 @@ void CWorkspace::moveToMonitor(const int& id) {
     ; // empty until https://gitlab.freedesktop.org/wayland/wayland-protocols/-/merge_requests/40
 }
 
-CWindow* CWorkspace::getLastFocusedWindow() {
-    if (!g_pCompositor->windowValidMapped(m_pLastFocusedWindow) || m_pLastFocusedWindow->workspaceID() != m_iID)
+PHLWINDOW CWorkspace::getLastFocusedWindow() {
+    if (!validMapped(m_pLastFocusedWindow) || m_pLastFocusedWindow->workspaceID() != m_iID)
         return nullptr;
 
-    return m_pLastFocusedWindow;
+    return m_pLastFocusedWindow.lock();
 }
 
 void CWorkspace::rememberPrevWorkspace(const PHLWORKSPACE& prev) {

@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#include <pwd.h>
 #include <unistd.h>
 #include <ranges>
 #include <algorithm>
@@ -38,24 +39,34 @@ struct SInstanceData {
     bool        valid = true;
 };
 
+std::string getRuntimeDir() {
+    const auto XDG = getenv("XDG_RUNTIME_DIR");
+
+    if (!XDG) {
+        const std::string USERID = std::to_string(getpwuid(getuid())->pw_uid);
+        return "/run/user/" + USERID + "/hypr";
+    }
+
+    return std::string{XDG} + "/hypr";
+}
+
 std::vector<SInstanceData> instances() {
     std::vector<SInstanceData> result;
 
-    for (const auto& el : std::filesystem::directory_iterator("/tmp/hypr")) {
-        if (el.is_directory() || !el.path().string().ends_with(".lock"))
+    for (const auto& el : std::filesystem::directory_iterator(getRuntimeDir())) {
+        if (!el.is_directory() || !std::filesystem::exists(el.path().string() + "/hyprland.lock"))
             continue;
 
         // read lock
         SInstanceData* data = &result.emplace_back();
-        data->id            = el.path().string();
-        data->id            = data->id.substr(data->id.find_last_of('/') + 1, data->id.find(".lock") - data->id.find_last_of('/') - 1);
+        data->id            = el.path().filename().string();
 
         try {
-            data->time = std::stoull(data->id.substr(data->id.find_first_of('_') + 1));
+            data->time = std::stoull(data->id.substr(data->id.find_first_of('_') + 1, data->id.find_last_of('_') - (data->id.find_first_of('_') + 1)));
         } catch (std::exception& e) { continue; }
 
         // read file
-        std::ifstream ifs(el.path().string());
+        std::ifstream ifs(el.path().string() + "/hyprland.lock");
 
         int           i = 0;
         for (std::string line; std::getline(ifs, line); ++i) {
@@ -79,43 +90,45 @@ std::vector<SInstanceData> instances() {
     return result;
 }
 
-void request(std::string arg, int minArgs = 0) {
+int request(std::string arg, int minArgs = 0) {
     const auto SERVERSOCKET = socket(AF_UNIX, SOCK_STREAM, 0);
 
     const auto ARGS = std::count(arg.begin(), arg.end(), ' ');
 
     if (ARGS < minArgs) {
         std::cout << "Not enough arguments, expected at least " << minArgs;
-        return;
+        return -1;
     }
 
     if (SERVERSOCKET < 0) {
         std::cout << "Couldn't open a socket (1)";
-        return;
+        return 1;
     }
 
     if (instanceSignature.empty()) {
         std::cout << "HYPRLAND_INSTANCE_SIGNATURE was not set! (Is Hyprland running?)";
-        return;
+        return 2;
     }
 
-    sockaddr_un serverAddress = {0};
-    serverAddress.sun_family  = AF_UNIX;
+    const std::string USERID = std::to_string(getpwuid(getuid())->pw_uid);
 
-    std::string socketPath = "/tmp/hypr/" + instanceSignature + "/.socket.sock";
+    sockaddr_un       serverAddress = {0};
+    serverAddress.sun_family        = AF_UNIX;
+
+    std::string socketPath = getRuntimeDir() + "/" + instanceSignature + "/.socket.sock";
 
     strncpy(serverAddress.sun_path, socketPath.c_str(), sizeof(serverAddress.sun_path) - 1);
 
     if (connect(SERVERSOCKET, (sockaddr*)&serverAddress, SUN_LEN(&serverAddress)) < 0) {
         std::cout << "Couldn't connect to " << socketPath << ". (3)";
-        return;
+        return 3;
     }
 
     auto sizeWritten = write(SERVERSOCKET, arg.c_str(), arg.length());
 
     if (sizeWritten < 0) {
         std::cout << "Couldn't write (4)";
-        return;
+        return 4;
     }
 
     std::string reply        = "";
@@ -125,7 +138,7 @@ void request(std::string arg, int minArgs = 0) {
 
     if (sizeWritten < 0) {
         std::cout << "Couldn't read (5)";
-        return;
+        return 5;
     }
 
     reply += std::string(buffer, sizeWritten);
@@ -134,7 +147,7 @@ void request(std::string arg, int minArgs = 0) {
         sizeWritten = read(SERVERSOCKET, buffer, 8192);
         if (sizeWritten < 0) {
             std::cout << "Couldn't read (5)";
-            return;
+            return 5;
         }
         reply += std::string(buffer, sizeWritten);
     }
@@ -142,31 +155,35 @@ void request(std::string arg, int minArgs = 0) {
     close(SERVERSOCKET);
 
     std::cout << reply;
+
+    return 0;
 }
 
-void requestHyprpaper(std::string arg) {
+int requestHyprpaper(std::string arg) {
     const auto SERVERSOCKET = socket(AF_UNIX, SOCK_STREAM, 0);
 
     if (SERVERSOCKET < 0) {
         std::cout << "Couldn't open a socket (1)";
-        return;
+        return 1;
     }
 
     if (instanceSignature.empty()) {
         std::cout << "HYPRLAND_INSTANCE_SIGNATURE was not set! (Is Hyprland running?)";
-        return;
+        return 2;
     }
 
     sockaddr_un serverAddress = {0};
     serverAddress.sun_family  = AF_UNIX;
 
-    std::string socketPath = "/tmp/hypr/" + instanceSignature + "/.hyprpaper.sock";
+    const std::string USERID = std::to_string(getpwuid(getuid())->pw_uid);
+
+    std::string       socketPath = getRuntimeDir() + "/" + instanceSignature + "/.hyprpaper.sock";
 
     strncpy(serverAddress.sun_path, socketPath.c_str(), sizeof(serverAddress.sun_path) - 1);
 
     if (connect(SERVERSOCKET, (sockaddr*)&serverAddress, SUN_LEN(&serverAddress)) < 0) {
         std::cout << "Couldn't connect to " << socketPath << ". (3)";
-        return;
+        return 3;
     }
 
     arg = arg.substr(arg.find_first_of('/') + 1); // strip flags
@@ -176,7 +193,7 @@ void requestHyprpaper(std::string arg) {
 
     if (sizeWritten < 0) {
         std::cout << "Couldn't write (4)";
-        return;
+        return 4;
     }
 
     char buffer[8192] = {0};
@@ -185,12 +202,14 @@ void requestHyprpaper(std::string arg) {
 
     if (sizeWritten < 0) {
         std::cout << "Couldn't read (5)";
-        return;
+        return 5;
     }
 
     close(SERVERSOCKET);
 
     std::cout << std::string(buffer);
+
+    return 0;
 }
 
 void batchRequest(std::string arg, bool json) {
@@ -369,33 +388,33 @@ int main(int argc, char** argv) {
     if (fullRequest.contains("/--batch"))
         batchRequest(fullRequest, json);
     else if (fullRequest.contains("/hyprpaper"))
-        requestHyprpaper(fullRequest);
+        exitStatus = requestHyprpaper(fullRequest);
     else if (fullRequest.contains("/switchxkblayout"))
-        request(fullRequest, 2);
+        exitStatus = request(fullRequest, 2);
     else if (fullRequest.contains("/seterror"))
-        request(fullRequest, 1);
+        exitStatus = request(fullRequest, 1);
     else if (fullRequest.contains("/setprop"))
-        request(fullRequest, 3);
+        exitStatus = request(fullRequest, 3);
     else if (fullRequest.contains("/plugin"))
-        request(fullRequest, 1);
+        exitStatus = request(fullRequest, 1);
     else if (fullRequest.contains("/dismissnotify"))
-        request(fullRequest, 0);
+        exitStatus = request(fullRequest, 0);
     else if (fullRequest.contains("/notify"))
-        request(fullRequest, 2);
+        exitStatus = request(fullRequest, 2);
     else if (fullRequest.contains("/output"))
-        request(fullRequest, 2);
+        exitStatus = request(fullRequest, 2);
     else if (fullRequest.contains("/setcursor"))
-        request(fullRequest, 1);
+        exitStatus = request(fullRequest, 1);
     else if (fullRequest.contains("/dispatch"))
-        request(fullRequest, 1);
+        exitStatus = request(fullRequest, 1);
     else if (fullRequest.contains("/keyword"))
-        request(fullRequest, 2);
+        exitStatus = request(fullRequest, 2);
     else if (fullRequest.contains("/decorations"))
-        request(fullRequest, 1);
+        exitStatus = request(fullRequest, 1);
     else if (fullRequest.contains("/--help"))
         std::cout << USAGE << std::endl;
     else {
-        request(fullRequest);
+        exitStatus = request(fullRequest);
     }
 
     std::cout << std::endl;

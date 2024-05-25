@@ -47,10 +47,9 @@ void CIdleInhibitProtocol::removeInhibitor(CIdleInhibitorResource* resource) {
 }
 
 void CIdleInhibitProtocol::onCreateInhibitor(CZwpIdleInhibitManagerV1* pMgr, uint32_t id, wlr_surface* surface) {
-    const auto CLIENT = wl_resource_get_client(pMgr->resource());
-    const auto RESOURCE =
-        m_vInhibitors.emplace_back(std::make_shared<CIdleInhibitorResource>(std::make_shared<CZwpIdleInhibitorV1>(CLIENT, wl_resource_get_version(pMgr->resource()), id), surface));
+    const auto CLIENT   = pMgr->client();
+    const auto RESOURCE = m_vInhibitors.emplace_back(makeShared<CIdleInhibitorResource>(makeShared<CZwpIdleInhibitorV1>(CLIENT, pMgr->version(), id), surface));
 
-    RESOURCE->inhibitor = std::make_shared<CIdleInhibitor>(RESOURCE, surface);
+    RESOURCE->inhibitor = makeShared<CIdleInhibitor>(RESOURCE, surface);
     events.newIdleInhibitor.emit(RESOURCE->inhibitor);
 }

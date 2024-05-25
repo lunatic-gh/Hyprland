@@ -1,12 +1,14 @@
 #include "RelativePointer.hpp"
-#include "Compositor.hpp"
+#include "../Compositor.hpp"
+#include "../managers/SeatManager.hpp"
+#include "core/Seat.hpp"
 #include <algorithm>
 
 CRelativePointer::CRelativePointer(SP<CZwpRelativePointerV1> resource_) : resource(resource_) {
     if (!resource_->resource())
         return;
 
-    pClient = wl_resource_get_client(resource_->resource());
+    pClient = resource->client();
 
     resource->setDestroy([this](CZwpRelativePointerV1* pMgr) { PROTO::relativePointer->destroyRelativePointer(this); });
     resource->setOnDestroy([this](CZwpRelativePointerV1* pMgr) { PROTO::relativePointer->destroyRelativePointer(this); });
@@ -46,12 +48,11 @@ void CRelativePointerProtocol::destroyRelativePointer(CRelativePointer* pointer)
 }
 
 void CRelativePointerProtocol::onGetRelativePointer(CZwpRelativePointerManagerV1* pMgr, uint32_t id, wl_resource* pointer) {
-    const auto CLIENT = wl_resource_get_client(pMgr->resource());
-    const auto RESOURCE =
-        m_vRelativePointers.emplace_back(std::make_unique<CRelativePointer>(std::make_shared<CZwpRelativePointerV1>(CLIENT, wl_resource_get_version(pMgr->resource()), id))).get();
+    const auto CLIENT   = pMgr->client();
+    const auto RESOURCE = m_vRelativePointers.emplace_back(std::make_unique<CRelativePointer>(makeShared<CZwpRelativePointerV1>(CLIENT, pMgr->version(), id))).get();
 
     if (!RESOURCE->good()) {
-        wl_resource_post_no_memory(pMgr->resource());
+        pMgr->noMemory();
         m_vRelativePointers.pop_back();
         return;
     }
@@ -59,10 +60,10 @@ void CRelativePointerProtocol::onGetRelativePointer(CZwpRelativePointerManagerV1
 
 void CRelativePointerProtocol::sendRelativeMotion(uint64_t time, const Vector2D& delta, const Vector2D& deltaUnaccel) {
 
-    if (!g_pCompositor->m_sSeat.seat->pointer_state.focused_client)
+    if (!g_pSeatManager->state.pointerFocusResource)
         return;
 
-    const auto FOCUSED = g_pCompositor->m_sSeat.seat->pointer_state.focused_client->client;
+    const auto FOCUSED = g_pSeatManager->state.pointerFocusResource->client();
 
     for (auto& rp : m_vRelativePointers) {
         if (FOCUSED != rp->client())

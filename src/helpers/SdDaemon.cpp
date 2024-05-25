@@ -4,8 +4,10 @@
 
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <string.h>
 
 namespace Systemd {
     int SdBooted(void) {

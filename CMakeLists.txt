@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.27)
+
 include(CheckIncludeFile)
+include(ExternalProject)
+include(GNUInstallDirs)
 
 # Get version
 file(READ ${CMAKE_CURRENT_SOURCE_DIR}/props.json PROPS)
@@ -12,7 +15,8 @@ project(Hyprland
 
 set(HYPRLAND_VERSION ${VER})
 set(PREFIX ${CMAKE_INSTALL_PREFIX})
-configure_file(hyprland.pc.in hyprland.pc @ONLY) 
+set(INCLUDEDIR ${CMAKE_INSTALL_INCLUDEDIR})
+configure_file(hyprland.pc.in hyprland.pc @ONLY)
 
 set(CMAKE_MESSAGE_LOG_LEVEL "STATUS")
 
@@ -23,16 +27,12 @@ message(STATUS "Gathering git info")
 execute_process(
     COMMAND ./scripts/generateVersion.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-#
-#
 
 # udis
 add_subdirectory("subprojects/udis86")
 
 # wlroots
 message(STATUS "Setting up wlroots")
-
-include(ExternalProject)
 
 if(CMAKE_BUILD_TYPE)
     string(TOLOWER ${CMAKE_BUILD_TYPE} BUILDTYPE_LOWER)
@@ -71,6 +71,7 @@ pkg_get_variable(WaylandScanner wayland-scanner wayland_scanner)
 message(STATUS "Found WaylandScanner at ${WaylandScanner}")
 pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
 message(STATUS "Found wayland-protocols at ${WAYLAND_PROTOCOLS_DIR}")
+pkg_get_variable(WAYLAND_SERVER_DIR wayland-server pkgdatadir)
 
 if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
     message(STATUS "Configuring Hyprland in Debug with CMake")
@@ -89,9 +90,12 @@ include_directories(
   "protocols/")
 set(CMAKE_CXX_STANDARD 23)
 add_compile_definitions(WLR_USE_UNSTABLE)
-add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-unused-value -Wno-missing-field-initializers -Wno-narrowing -Wno-pointer-arith)
+add_compile_options(-Wall -Wextra -Wno-unused-parameter -Wno-unused-value
+    -Wno-missing-field-initializers -Wno-narrowing -Wno-pointer-arith
+    -fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=)
 
 set(CMAKE_EXECUTABLE_ENABLE_EXPORTS TRUE)
+set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
 message(STATUS "Checking deps...")
 
@@ -109,10 +113,10 @@ pkg_check_modules(deps REQUIRED IMPORTED_TARGET
     wayland-server wayland-client wayland-cursor wayland-protocols
     cairo pango pangocairo pixman-1
     libdrm libinput hwdata libseat libdisplay-info libliftoff libudev gbm
-    hyprwayland-scanner>=0.3.1 hyprlang>=0.3.2 hyprcursor>=0.1.7
+    hyprwayland-scanner>=0.3.8 hyprlang>=0.3.2 hyprcursor>=0.1.7
 )
 
-file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS "src/*.cpp")
+file(GLOB_RECURSE SRCFILES "src/*.cpp")
 
 set(TRACY_CPP_FILES "")
 if(USE_TRACY)
@@ -122,6 +126,8 @@ endif()
 
 add_executable(Hyprland ${SRCFILES} ${TRACY_CPP_FILES})
 add_dependencies(Hyprland wlroots-hyprland)
+
+set(USE_GPROF ON)
 
 if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
     message(STATUS "Setting debug flags")
@@ -148,8 +154,12 @@ if(CMAKE_BUILD_TYPE MATCHES Debug OR CMAKE_BUILD_TYPE MATCHES DEBUG)
         endif()
     endif()
 
-    add_compile_options(-pg -no-pie -fno-builtin)
-    add_link_options(-pg -no-pie -fno-builtin)
+    add_compile_options(-fno-pie -fno-builtin)
+    add_link_options(-no-pie -fno-builtin)
+    if(USE_GPROF)
+        add_compile_options(-pg)
+        add_link_options(-pg)
+    endif()
 endif()
 
 check_include_file("execinfo.h" EXECINFOH)
@@ -239,6 +249,13 @@ function(protocolNew protoPath protoName external)
         target_sources(Hyprland PRIVATE protocols/${protoName}.cpp)
     endif()
 endfunction()
+function(protocolWayland)
+    execute_process(
+        COMMAND hyprwayland-scanner --wayland-enums ${WAYLAND_SERVER_DIR}/wayland.xml ${CMAKE_SOURCE_DIR}/protocols/
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    target_sources(Hyprland PRIVATE protocols/wayland.cpp)
+endfunction()
 
 target_link_libraries(Hyprland
         ${CMAKE_SOURCE_DIR}/subprojects/wlroots-hyprland/build/libwlroots.a
@@ -249,20 +266,23 @@ target_link_libraries(Hyprland
         uuid
 )
 
-protocol("protocols/idle.xml" "idle" true)
-protocol("protocols/pointer-constraints-unstable-v1.xml" "pointer-constraints-unstable-v1" true)
-protocol("protocols/tablet-unstable-v2.xml" "tablet-unstable-v2" true)
-protocol("protocols/wlr-layer-shell-unstable-v1.xml" "wlr-layer-shell-unstable-v1" true)
-protocol("protocols/wlr-output-power-management-unstable-v1.xml" "wlr-output-power-management-unstable-v1" true)
 protocol("protocols/wlr-screencopy-unstable-v1.xml" "wlr-screencopy-unstable-v1" true)
 protocol("subprojects/hyprland-protocols/protocols/hyprland-global-shortcuts-v1.xml" "hyprland-global-shortcuts-v1" true)
 protocol("subprojects/hyprland-protocols/protocols/hyprland-toplevel-export-v1.xml" "hyprland-toplevel-export-v1" true)
-protocol("stable/xdg-shell/xdg-shell.xml" "xdg-shell" false)
 protocol("unstable/linux-dmabuf/linux-dmabuf-unstable-v1.xml" "linux-dmabuf-unstable-v1" false)
 protocol("unstable/text-input/text-input-unstable-v1.xml" "text-input-unstable-v1" false)
 
 protocolNew("protocols/wlr-gamma-control-unstable-v1.xml" "wlr-gamma-control-unstable-v1" true)
 protocolNew("protocols/wlr-foreign-toplevel-management-unstable-v1.xml" "wlr-foreign-toplevel-management-unstable-v1" true)
+protocolNew("protocols/wlr-output-power-management-unstable-v1.xml" "wlr-output-power-management-unstable-v1" true)
+protocolNew("protocols/virtual-keyboard-unstable-v1.xml" "virtual-keyboard-unstable-v1" true)
+protocolNew("protocols/wlr-virtual-pointer-unstable-v1.xml" "wlr-virtual-pointer-unstable-v1" true)
+protocolNew("protocols/input-method-unstable-v2.xml" "input-method-unstable-v2" true)
+protocolNew("protocols/wlr-output-management-unstable-v1.xml" "wlr-output-management-unstable-v1" true)
+protocolNew("protocols/kde-server-decoration.xml" "kde-server-decoration" true)
+protocolNew("protocols/wlr-data-control-unstable-v1.xml" "wlr-data-control-unstable-v1" true)
+protocolNew("subprojects/hyprland-protocols/protocols/hyprland-focus-grab-v1.xml" "hyprland-focus-grab-v1" true)
+protocolNew("protocols/wlr-layer-shell-unstable-v1.xml" "wlr-layer-shell-unstable-v1" true)
 protocolNew("staging/tearing-control/tearing-control-v1.xml" "tearing-control-v1" false)
 protocolNew("staging/fractional-scale/fractional-scale-v1.xml" "fractional-scale-v1" false)
 protocolNew("unstable/xdg-output/xdg-output-unstable-v1.xml" "xdg-output-unstable-v1" false)
@@ -274,7 +294,79 @@ protocolNew("staging/alpha-modifier/alpha-modifier-v1.xml" "alpha-modifier-v1" f
 protocolNew("staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml" "ext-foreign-toplevel-list-v1" false)
 protocolNew("unstable/pointer-gestures/pointer-gestures-unstable-v1.xml" "pointer-gestures-unstable-v1" false)
 protocolNew("unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml" "keyboard-shortcuts-inhibit-unstable-v1" false)
+protocolNew("unstable/text-input/text-input-unstable-v3.xml" "text-input-unstable-v3" false)
+protocolNew("unstable/pointer-constraints/pointer-constraints-unstable-v1.xml" "pointer-constraints-unstable-v1" false)
+protocolNew("staging/xdg-activation/xdg-activation-v1.xml" "xdg-activation-v1" false)
+protocolNew("staging/ext-idle-notify/ext-idle-notify-v1.xml" "ext-idle-notify-v1" false)
+protocolNew("staging/ext-session-lock/ext-session-lock-v1.xml" "ext-session-lock-v1" false)
+protocolNew("stable/tablet/tablet-v2.xml" "tablet-v2" false)
+protocolNew("stable/presentation-time/presentation-time.xml" "presentation-time" false)
+protocolNew("stable/xdg-shell/xdg-shell.xml" "xdg-shell" false)
+protocolNew("unstable/primary-selection/primary-selection-unstable-v1.xml" "primary-selection-unstable-v1" false)
+
+protocolWayland()
 
 # tools
 add_subdirectory(hyprctl)
 add_subdirectory(hyprpm)
+
+# binary and symlink
+install(TARGETS Hyprland)
+
+install(CODE "execute_process( \
+        COMMAND ${CMAKE_COMMAND} -E create_symlink \
+        ${CMAKE_INSTALL_BINDIR}/Hyprland \
+        ${CMAKE_INSTALL_BINDIR}/hyprland
+        )"
+)
+
+# session file
+install(FILES ${CMAKE_SOURCE_DIR}/example/hyprland.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/wayland-sessions)
+
+# wallpapers
+file(GLOB_RECURSE WALLPAPERS "assets/wall*")
+install(FILES ${WALLPAPERS}
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/hyprland)
+
+# default config
+install(FILES ${CMAKE_SOURCE_DIR}/example/hyprland.conf
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/hyprland)
+
+# portal config
+install(FILES ${CMAKE_SOURCE_DIR}/assets/hyprland-portals.conf
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal)
+
+# man pages
+file(GLOB_RECURSE MANPAGES "docs/*.1")
+install(FILES ${MANPAGES}
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+
+
+# pkgconfig entry
+install(FILES ${CMAKE_BINARY_DIR}/hyprland.pc
+        DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/pkgconfig)
+
+# wlroots headers
+set(HEADERS_WLR "${CMAKE_CURRENT_SOURCE_DIR}/subprojects/wlroots-hyprland/include/wlr")
+install(DIRECTORY ${HEADERS_WLR}
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hyprland
+        FILES_MATCHING PATTERN "*.h")
+
+# config.h and version.h
+set(HEADERS_WLR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/subprojects/wlroots-hyprland/build/include/wlr")
+install(DIRECTORY ${HEADERS_WLR_ROOT}/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hyprland/wlr
+        FILES_MATCHING PATTERN "*.h")
+
+# protocol headers
+set(HEADERS_PROTO "${CMAKE_CURRENT_SOURCE_DIR}/protocols")
+install(DIRECTORY ${HEADERS_PROTO}
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hyprland
+        FILES_MATCHING PATTERN "*.h*")
+
+# hyprland headers
+set(HEADERS_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+install(DIRECTORY ${HEADERS_SRC}
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/hyprland
+        FILES_MATCHING PATTERN "*.h*")

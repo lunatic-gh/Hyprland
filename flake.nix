@@ -7,25 +7,11 @@
     # <https://github.com/nix-systems/nix-systems>
     systems.url = "github:nix-systems/default-linux";
 
-    wlroots = {
-      type = "github";
-      owner = "hyprwm";
-      repo = "wlroots-hyprland";
-      rev = "5c1d51c5a2793480f5b6c4341ad0797052aec2ea";
-      flake = false;
-    };
-
     hyprcursor = {
       url = "github:hyprwm/hyprcursor";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.systems.follows = "systems";
       inputs.hyprlang.follows = "hyprlang";
-    };
-
-    hyprland-protocols = {
-      url = "github:hyprwm/hyprland-protocols";
-      inputs.nixpkgs.follows = "nixpkgs";
-      inputs.systems.follows = "systems";
     };
 
     hyprlang = {
@@ -44,7 +30,6 @@
       url = "github:hyprwm/xdg-desktop-portal-hyprland";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.systems.follows = "systems";
-      inputs.hyprland-protocols.follows = "hyprland-protocols";
       inputs.hyprlang.follows = "hyprlang";
     };
   };
@@ -89,11 +74,6 @@
         # hyprland-extras
         
         xdg-desktop-portal-hyprland
-        # dependencies
-        
-        hyprland-protocols
-        wlroots-hyprland
-        udis86
         ;
     });
 
@@ -103,13 +83,9 @@
           stdenv = pkgsFor.${system}.gcc13Stdenv;
         } {
           name = "hyprland-shell";
-          nativeBuildInputs = with pkgsFor.${system}; [cmake python3 expat libxml2];
-          buildInputs = [self.packages.${system}.wlroots-hyprland];
+          nativeBuildInputs = with pkgsFor.${system}; [expat libxml2];
           hardeningDisable = ["fortify"];
-          inputsFrom = [
-            self.packages.${system}.wlroots-hyprland
-            self.packages.${system}.hyprland
-          ];
+          inputsFrom = [pkgsFor.${system}.hyprland];
         };
     });
 
@@ -117,10 +93,5 @@
 
     nixosModules.default = import ./nix/module.nix inputs;
     homeManagerModules.default = import ./nix/hm-module.nix self;
-  };
-
-  nixConfig = {
-    extra-substituters = ["https://hyprland.cachix.org"];
-    extra-trusted-public-keys = ["hyprland.cachix.org-1:a7pgxzMz7+chwVL3/pzj6jIBMioiJM7ypFP8PwtkuGc="];
   };
 }

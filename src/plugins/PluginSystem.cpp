@@ -97,8 +97,8 @@ void CPluginSystem::unloadPlugin(const CPlugin* plugin, bool eject) {
     }
 
     for (auto& [k, v] : plugin->registeredCallbacks) {
-        if (const auto SP = v.lock())
-            g_pHookSystem->unhook(SP);
+        if (const auto SHP = v.lock())
+            g_pHookSystem->unhook(SHP);
     }
 
     const auto ls = plugin->registeredLayouts;
@@ -193,4 +193,14 @@ std::vector<CPlugin*> CPluginSystem::getAllPlugins() {
     for (size_t i = 0; i < m_vLoadedPlugins.size(); ++i)
         results[i] = m_vLoadedPlugins[i].get();
     return results;
+}
+
+size_t CPluginSystem::pluginCount() {
+    return m_vLoadedPlugins.size();
+}
+
+void CPluginSystem::sig_getPlugins(CPlugin** data, size_t len) {
+    for (size_t i = 0; i < std::min(m_vLoadedPlugins.size(), len); i++) {
+        data[i] = m_vLoadedPlugins[i].get();
+    }
 }
