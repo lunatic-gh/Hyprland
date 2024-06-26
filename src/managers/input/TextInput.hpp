@@ -2,8 +2,8 @@
 
 #include "../../helpers/WLListener.hpp"
 #include "../../macros.hpp"
-#include "../../helpers/Box.hpp"
-#include "../../helpers/signal/Listener.hpp"
+#include "../../helpers/math/Math.hpp"
+#include "../../helpers/signal/Signal.hpp"
 #include <memory>
 
 struct wl_client;

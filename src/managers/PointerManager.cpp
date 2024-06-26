@@ -150,12 +150,44 @@ CPointerManager::CPointerManager() {
     });
 }
 
+void CPointerManager::lockSoftwareAll() {
+    for (auto& state : monitorStates)
+        state->softwareLocks++;
+
+    updateCursorBackend();
+}
+
+void CPointerManager::unlockSoftwareAll() {
+    for (auto& state : monitorStates)
+        state->softwareLocks--;
+
+    updateCursorBackend();
+}
+
+void CPointerManager::lockSoftwareForMonitor(CMonitor* Monitor) {
+    for (auto& m : g_pCompositor->m_vMonitors) {
+        if (m->ID == Monitor->ID) {
+            lockSoftwareForMonitor(m);
+            return;
+        }
+    }
+}
+
 void CPointerManager::lockSoftwareForMonitor(SP<CMonitor> mon) {
     auto state = stateFor(mon);
     state->softwareLocks++;
 
     if (state->softwareLocks == 1)
         updateCursorBackend();
+}
+
+void CPointerManager::unlockSoftwareForMonitor(CMonitor* Monitor) {
+    for (auto& m : g_pCompositor->m_vMonitors) {
+        if (m->ID == Monitor->ID) {
+            unlockSoftwareForMonitor(m);
+            return;
+        }
+    }
 }
 
 void CPointerManager::unlockSoftwareForMonitor(SP<CMonitor> mon) {
@@ -544,6 +576,8 @@ void CPointerManager::renderSoftwareCursorsFor(SP<CMonitor> pMonitor, timespec* 
         return;
 
     box.scale(pMonitor->scale);
+    box.x = std::round(box.x);
+    box.y = std::round(box.y);
 
     g_pHyprOpenGL->renderTextureWithDamage(texture, &box, &damage, 1.F);
 
@@ -563,7 +597,7 @@ Vector2D CPointerManager::transformedHotspot(SP<CMonitor> pMonitor) {
         return {}; // doesn't matter, we have no hw cursor, and this is only for hw cursors
 
     return CBox{currentCursorImage.hotspot * pMonitor->scale, {0, 0}}
-        .transform(wlr_output_transform_invert(pMonitor->transform), pMonitor->output->cursor_swapchain->width, pMonitor->output->cursor_swapchain->height)
+        .transform(wlTransformToHyprutils(wlr_output_transform_invert(pMonitor->transform)), pMonitor->output->cursor_swapchain->width, pMonitor->output->cursor_swapchain->height)
         .pos();
 }
 
@@ -661,7 +695,7 @@ void CPointerManager::damageIfSoftware() {
             continue;
 
         if ((mw->softwareLocks > 0 || mw->hardwareFailed || *PNOHW) && b.overlaps({mw->monitor->vecPosition, mw->monitor->vecSize})) {
-            g_pHyprRenderer->damageBox(&b);
+            g_pHyprRenderer->damageBox(&b, mw->monitor->shouldSkipScheduleFrameOnMouseEvent());
             break;
         }
     }

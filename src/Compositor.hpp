@@ -3,6 +3,7 @@
 #include <memory>
 #include <deque>
 #include <list>
+#include <sys/resource.h>
 
 #include "defines.hpp"
 #include "debug/Log.hpp"
@@ -81,6 +82,8 @@ class CCompositor {
     void                                      cleanup();
     void                                      createLockFile();
     void                                      removeLockFile();
+    void                                      bumpNofile();
+    void                                      restoreNofile();
 
     WP<CWLSurfaceResource>                    m_pLastFocus;
     PHLWINDOWREF                              m_pLastWindow;
@@ -118,6 +121,7 @@ class CCompositor {
     PHLWINDOW              getWindowFromSurface(SP<CWLSurfaceResource>);
     PHLWINDOW              getWindowFromHandle(uint32_t);
     bool                   isWorkspaceVisible(PHLWORKSPACE);
+    bool                   isWorkspaceVisibleNotCovered(PHLWORKSPACE);
     PHLWORKSPACE           getWorkspaceByID(const int&);
     PHLWORKSPACE           getWorkspaceByName(const std::string&);
     PHLWORKSPACE           getWorkspaceByString(const std::string&);
@@ -155,6 +159,7 @@ class CCompositor {
     PHLWINDOW              getX11Parent(PHLWINDOW);
     void                   scheduleFrameForMonitor(CMonitor*);
     void                   addToFadingOutSafe(PHLLS);
+    void                   removeFromFadingOutSafe(PHLLS);
     void                   addToFadingOutSafe(PHLWINDOW);
     PHLWINDOW              getWindowByRegex(const std::string&);
     void                   warpCursorTo(const Vector2D&, bool force = false);
@@ -188,8 +193,9 @@ class CCompositor {
     void             initManagers(eManagersInitStage stage);
     void             prepareFallbackOutput();
 
-    uint64_t         m_iHyprlandPID  = 0;
-    wl_event_source* m_critSigSource = nullptr;
+    uint64_t         m_iHyprlandPID    = 0;
+    wl_event_source* m_critSigSource   = nullptr;
+    rlimit           m_sOriginalNofile = {0};
 };
 
 inline std::unique_ptr<CCompositor> g_pCompositor;

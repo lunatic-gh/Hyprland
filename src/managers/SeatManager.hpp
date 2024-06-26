@@ -5,7 +5,7 @@
 #include "../helpers/WLListener.hpp"
 #include "../macros.hpp"
 #include "../helpers/signal/Signal.hpp"
-#include "../helpers/Vector2D.hpp"
+#include "../helpers/math/Math.hpp"
 #include "../protocols/types/DataDevice.hpp"
 #include <vector>
 
@@ -155,6 +155,7 @@ class CSeatManager {
     } listeners;
 
     Vector2D lastLocalCoords;
+    int      touchLocks = 0; // we assume there aint like 20 touch devices at once...
 
     friend struct SSeatResourceContainer;
     friend class CSeatGrab;

@@ -79,20 +79,20 @@ CHyprOpenGLImpl::CHyprOpenGLImpl() {
     m_tGlobalTimer.reset();
 }
 
-std::vector<uint64_t> CHyprOpenGLImpl::getModsForFormat(EGLint format) {
+std::optional<std::vector<uint64_t>> CHyprOpenGLImpl::getModsForFormat(EGLint format) {
     // TODO: return std::expected when clang supports it
 
     if (!m_sExts.EXT_image_dma_buf_import_modifiers)
-        return {};
+        return std::nullopt;
 
     EGLint len = 0;
     if (!m_sProc.eglQueryDmaBufModifiersEXT(wlr_egl_get_display(g_pCompositor->m_sWLREGL), format, 0, nullptr, nullptr, &len)) {
         Debug::log(ERR, "EGL: Failed to query mods");
-        return {};
+        return std::nullopt;
     }
 
     if (len <= 0)
-        return {};
+        return std::vector<uint64_t>{};
 
     std::vector<uint64_t>   mods;
     std::vector<EGLBoolean> external;
@@ -103,12 +103,20 @@ std::vector<uint64_t> CHyprOpenGLImpl::getModsForFormat(EGLint format) {
     m_sProc.eglQueryDmaBufModifiersEXT(wlr_egl_get_display(g_pCompositor->m_sWLREGL), format, len, mods.data(), external.data(), &len);
 
     std::vector<uint64_t> result;
+    bool                  linearIsExternal = false;
     for (size_t i = 0; i < mods.size(); ++i) {
-        if (external.at(i))
+        if (external.at(i)) {
+            if (mods.at(i) == DRM_FORMAT_MOD_LINEAR)
+                linearIsExternal = true;
             continue;
+        }
 
         result.push_back(mods.at(i));
     }
+
+    // if the driver doesn't mark linear as external, add it. It's allowed unless the driver says otherwise. (e.g. nvidia)
+    if (!linearIsExternal && std::find(mods.begin(), mods.end(), DRM_FORMAT_MOD_LINEAR) == mods.end() && mods.size() == 0)
+        mods.push_back(DRM_FORMAT_MOD_LINEAR);
 
     return result;
 }
@@ -147,15 +155,19 @@ void CHyprOpenGLImpl::initDRMFormats() {
 
     for (auto& fmt : formats) {
         std::vector<uint64_t> mods;
-        if (!DISABLE_MODS)
-            mods = getModsForFormat(fmt);
-        else
+        if (!DISABLE_MODS) {
+            auto ret = getModsForFormat(fmt);
+            if (!ret.has_value())
+                continue;
+
+            mods = *ret;
+        } else
             mods = {DRM_FORMAT_MOD_LINEAR};
 
         m_bHasModifiers = m_bHasModifiers || mods.size() > 0;
 
-        if (mods.size() == 0)
-            continue;
+        // EGL can always do implicit modifiers.
+        mods.push_back(DRM_FORMAT_MOD_INVALID);
 
         dmaFormats.push_back(SDRMFormat{
             .format = fmt,
@@ -189,6 +201,10 @@ void CHyprOpenGLImpl::initDRMFormats() {
     }
 
     Debug::log(LOG, "EGL: {} formats found in total. Some modifiers may be omitted as they are external-only.", dmaFormats.size());
+
+    if (dmaFormats.size() == 0)
+        Debug::log(WARN,
+                   "EGL: WARNING: No dmabuf formats were found, dmabuf will be disabled. This will degrade performance, but is most likely a driver issue or a very old GPU.");
 
     drmFormats = dmaFormats;
 }
@@ -900,7 +916,7 @@ void CHyprOpenGLImpl::scissor(const CBox* pBox, bool transform) {
         int w, h;
         wlr_output_transformed_resolution(m_RenderData.pMonitor->output, &w, &h);
 
-        const auto TR = wlr_output_transform_invert(m_RenderData.pMonitor->transform);
+        const auto TR = wlTransformToHyprutils(wlr_output_transform_invert(m_RenderData.pMonitor->transform));
         newBox.transform(TR, w, h);
     }
 
@@ -990,8 +1006,8 @@ void CHyprOpenGLImpl::renderRectWithDamage(CBox* box, const CColor& col, CRegion
     box = &newBox;
 
     float matrix[9];
-    wlr_matrix_project_box(matrix, box->pWlr(), wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform), newBox.rot,
-                           m_RenderData.monitorProjection.data()); // TODO: write own, don't use WLR here
+    projectBox(matrix, newBox, wlTransformToHyprutils(wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform)), newBox.rot,
+               m_RenderData.monitorProjection.data()); // TODO: write own, don't use WLR here
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -1009,7 +1025,7 @@ void CHyprOpenGLImpl::renderRectWithDamage(CBox* box, const CColor& col, CRegion
     glUniform4f(m_RenderData.pCurrentMonData->m_shQUAD.color, col.r * col.a, col.g * col.a, col.b * col.a, col.a);
 
     CBox transformedBox = *box;
-    transformedBox.transform(wlr_output_transform_invert(m_RenderData.pMonitor->transform), m_RenderData.pMonitor->vecTransformedSize.x,
+    transformedBox.transform(wlTransformToHyprutils(wlr_output_transform_invert(m_RenderData.pMonitor->transform)), m_RenderData.pMonitor->vecTransformedSize.x,
                              m_RenderData.pMonitor->vecTransformedSize.y);
 
     const auto TOPLEFT  = Vector2D(transformedBox.x, transformedBox.y);
@@ -1081,9 +1097,9 @@ void CHyprOpenGLImpl::renderTextureInternalWithDamage(SP<CTexture> tex, CBox* pB
     static auto PDT          = CConfigValue<Hyprlang::INT>("debug:damage_tracking");
 
     // get transform
-    const auto TRANSFORM = wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform);
+    const auto TRANSFORM = wlTransformToHyprutils(wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform));
     float      matrix[9];
-    wlr_matrix_project_box(matrix, newBox.pWlr(), TRANSFORM, newBox.rot, m_RenderData.monitorProjection.data());
+    projectBox(matrix, newBox, TRANSFORM, newBox.rot, m_RenderData.monitorProjection.data());
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -1169,7 +1185,7 @@ void CHyprOpenGLImpl::renderTextureInternalWithDamage(SP<CTexture> tex, CBox* pB
     }
 
     CBox transformedBox = newBox;
-    transformedBox.transform(wlr_output_transform_invert(m_RenderData.pMonitor->transform), m_RenderData.pMonitor->vecTransformedSize.x,
+    transformedBox.transform(wlTransformToHyprutils(wlr_output_transform_invert(m_RenderData.pMonitor->transform)), m_RenderData.pMonitor->vecTransformedSize.x,
                              m_RenderData.pMonitor->vecTransformedSize.y);
 
     const auto TOPLEFT  = Vector2D(transformedBox.x, transformedBox.y);
@@ -1244,9 +1260,9 @@ void CHyprOpenGLImpl::renderTexturePrimitive(SP<CTexture> tex, CBox* pBox) {
     m_RenderData.renderModif.applyToBox(newBox);
 
     // get transform
-    const auto TRANSFORM = wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform);
+    const auto TRANSFORM = wlTransformToHyprutils(wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform));
     float      matrix[9];
-    wlr_matrix_project_box(matrix, newBox.pWlr(), TRANSFORM, newBox.rot, m_RenderData.monitorProjection.data());
+    projectBox(matrix, newBox, TRANSFORM, newBox.rot, m_RenderData.monitorProjection.data());
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -1298,9 +1314,9 @@ void CHyprOpenGLImpl::renderTextureMatte(SP<CTexture> tex, CBox* pBox, CFramebuf
     m_RenderData.renderModif.applyToBox(newBox);
 
     // get transform
-    const auto TRANSFORM = wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform);
+    const auto TRANSFORM = wlTransformToHyprutils(wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform));
     float      matrix[9];
-    wlr_matrix_project_box(matrix, newBox.pWlr(), TRANSFORM, newBox.rot, m_RenderData.monitorProjection.data());
+    projectBox(matrix, newBox, TRANSFORM, newBox.rot, m_RenderData.monitorProjection.data());
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -1356,10 +1372,10 @@ CFramebuffer* CHyprOpenGLImpl::blurMainFramebufferWithDamage(float a, CRegion* o
     glDisable(GL_STENCIL_TEST);
 
     // get transforms for the full monitor
-    const auto TRANSFORM = wlr_output_transform_invert(m_RenderData.pMonitor->transform);
+    const auto TRANSFORM = wlTransformToHyprutils(wlr_output_transform_invert(m_RenderData.pMonitor->transform));
     float      matrix[9];
     CBox       MONITORBOX = {0, 0, m_RenderData.pMonitor->vecTransformedSize.x, m_RenderData.pMonitor->vecTransformedSize.y};
-    wlr_matrix_project_box(matrix, MONITORBOX.pWlr(), TRANSFORM, 0, m_RenderData.monitorProjection.data());
+    projectBox(matrix, MONITORBOX, TRANSFORM, 0, m_RenderData.monitorProjection.data());
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -1854,8 +1870,8 @@ void CHyprOpenGLImpl::renderBorder(CBox* box, const CGradientValueData& grad, in
     round += round == 0 ? 0 : scaledBorderSize;
 
     float matrix[9];
-    wlr_matrix_project_box(matrix, box->pWlr(), wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform), newBox.rot,
-                           m_RenderData.monitorProjection.data()); // TODO: write own, don't use WLR here
+    projectBox(matrix, newBox, wlTransformToHyprutils(wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform)), newBox.rot,
+               m_RenderData.monitorProjection.data()); // TODO: write own, don't use WLR here
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -1880,7 +1896,7 @@ void CHyprOpenGLImpl::renderBorder(CBox* box, const CGradientValueData& grad, in
     glUniform1f(m_RenderData.pCurrentMonData->m_shBORDER1.alpha, a);
 
     CBox transformedBox = *box;
-    transformedBox.transform(wlr_output_transform_invert(m_RenderData.pMonitor->transform), m_RenderData.pMonitor->vecTransformedSize.x,
+    transformedBox.transform(wlTransformToHyprutils(wlr_output_transform_invert(m_RenderData.pMonitor->transform)), m_RenderData.pMonitor->vecTransformedSize.x,
                              m_RenderData.pMonitor->vecTransformedSize.y);
 
     const auto TOPLEFT  = Vector2D(transformedBox.x, transformedBox.y);
@@ -2160,8 +2176,8 @@ void CHyprOpenGLImpl::renderRoundedShadow(CBox* box, int round, int range, const
     const auto  col = color;
 
     float       matrix[9];
-    wlr_matrix_project_box(matrix, box->pWlr(), wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform), newBox.rot,
-                           m_RenderData.monitorProjection.data()); // TODO: write own, don't use WLR here
+    projectBox(matrix, newBox, wlTransformToHyprutils(wlr_output_transform_invert(!m_bEndFrame ? WL_OUTPUT_TRANSFORM_NORMAL : m_RenderData.pMonitor->transform)), newBox.rot,
+               m_RenderData.monitorProjection.data()); // TODO: write own, don't use WLR here
 
     float glMatrix[9];
     wlr_matrix_multiply(glMatrix, m_RenderData.projection, matrix);
@@ -2242,7 +2258,7 @@ void CHyprOpenGLImpl::renderMirrored() {
     CBox   monbox = {0, 0, mirrored->vecTransformedSize.x * scale, mirrored->vecTransformedSize.y * scale};
 
     // transform box as it will be drawn on a transformed projection
-    monbox.transform(mirrored->transform, mirrored->vecTransformedSize.x * scale, mirrored->vecTransformedSize.y * scale);
+    monbox.transform(wlTransformToHyprutils(mirrored->transform), mirrored->vecTransformedSize.x * scale, mirrored->vecTransformedSize.y * scale);
 
     monbox.x = (monitor->vecTransformedSize.x - monbox.w) / 2;
     monbox.y = (monitor->vecTransformedSize.y - monbox.h) / 2;

@@ -12,6 +12,9 @@
 #include "../protocols/core/Compositor.hpp"
 #include "../xwayland/XWayland.hpp"
 
+#include <hyprutils/string/String.hpp>
+using namespace Hyprutils::String;
+
 PHLWINDOW CWindow::create(SP<CXWaylandSurface> surface) {
     PHLWINDOW pWindow = SP<CWindow>(new CWindow(surface));
 
@@ -101,7 +104,7 @@ CWindow::~CWindow() {
     std::erase_if(g_pHyprOpenGL->m_mWindowFramebuffers, [&](const auto& other) { return !other.first.lock() || other.first.lock().get() == this; });
 }
 
-SWindowDecorationExtents CWindow::getFullWindowExtents() {
+SBoxExtents CWindow::getFullWindowExtents() {
     if (m_bFadingOut)
         return m_eOriginalClosedExtents;
 
@@ -113,9 +116,9 @@ SWindowDecorationExtents CWindow::getFullWindowExtents() {
                     {PMONITOR->vecSize.x - (m_vRealPosition.value().x - PMONITOR->vecPosition.x), PMONITOR->vecSize.y - (m_vRealPosition.value().y - PMONITOR->vecPosition.y)}};
     }
 
-    SWindowDecorationExtents maxExtents = {{BORDERSIZE + 2, BORDERSIZE + 2}, {BORDERSIZE + 2, BORDERSIZE + 2}};
+    SBoxExtents maxExtents = {{BORDERSIZE + 2, BORDERSIZE + 2}, {BORDERSIZE + 2, BORDERSIZE + 2}};
 
-    const auto               EXTENTS = g_pDecorationPositioner->getWindowDecorationExtents(m_pSelf.lock());
+    const auto  EXTENTS = g_pDecorationPositioner->getWindowDecorationExtents(m_pSelf.lock());
 
     if (EXTENTS.topLeft.x > maxExtents.topLeft.x)
         maxExtents.topLeft.x = EXTENTS.topLeft.x;
@@ -221,7 +224,7 @@ CBox CWindow::getWindowBoxUnified(uint64_t properties) {
             return {PMONITOR->vecPosition.x, PMONITOR->vecPosition.y, PMONITOR->vecSize.x, PMONITOR->vecSize.y};
     }
 
-    SWindowDecorationExtents EXTENTS = {{0, 0}, {0, 0}};
+    SBoxExtents EXTENTS = {{0, 0}, {0, 0}};
     if (properties & RESERVED_EXTENTS)
         EXTENTS.addExtents(g_pDecorationPositioner->getWindowDecorationReserved(m_pSelf.lock()));
     if (properties & INPUT_EXTENTS)
@@ -239,7 +242,7 @@ CBox CWindow::getWindowMainSurfaceBox() {
     return {m_vRealPosition.value().x, m_vRealPosition.value().y, m_vRealSize.value().x, m_vRealSize.value().y};
 }
 
-SWindowDecorationExtents CWindow::getFullWindowReservedArea() {
+SBoxExtents CWindow::getFullWindowReservedArea() {
     return g_pDecorationPositioner->getWindowDecorationReserved(m_pSelf.lock());
 }
 
@@ -687,7 +690,7 @@ void CWindow::applyDynamicRule(const SWindowRule& r) {
             CGradientValueData activeBorderGradient   = {};
             CGradientValueData inactiveBorderGradient = {};
             bool               active                 = true;
-            CVarList           colorsAndAngles        = CVarList(removeBeginEndSpacesTabs(r.szRule.substr(r.szRule.find_first_of(' ') + 1)), 0, 's', true);
+            CVarList           colorsAndAngles        = CVarList(trim(r.szRule.substr(r.szRule.find_first_of(' ') + 1)), 0, 's', true);
 
             // Basic form has only two colors, everything else can be parsed as a gradient
             if (colorsAndAngles.size() == 2 && !colorsAndAngles[1].contains("deg")) {
@@ -1536,4 +1539,59 @@ void CWindow::warpCursor() {
         g_pCompositor->warpCursorTo(m_vPosition + coords);
     else
         g_pCompositor->warpCursorTo(middle());
+}
+
+PHLWINDOW CWindow::getSwallower() {
+    static auto PSWALLOWREGEX   = CConfigValue<std::string>("misc:swallow_regex");
+    static auto PSWALLOWEXREGEX = CConfigValue<std::string>("misc:swallow_exception_regex");
+    static auto PSWALLOW        = CConfigValue<Hyprlang::INT>("misc:enable_swallow");
+
+    if (!*PSWALLOW || (*PSWALLOWREGEX).empty())
+        return nullptr;
+
+    // check parent
+    std::vector<PHLWINDOW> candidates;
+    pid_t                  currentPid = getPID();
+    // walk up the tree until we find someone, 25 iterations max.
+    for (size_t i = 0; i < 25; ++i) {
+        currentPid = getPPIDof(currentPid);
+
+        if (!currentPid)
+            break;
+
+        for (auto& w : g_pCompositor->m_vWindows) {
+            if (!w->m_bIsMapped || w->isHidden())
+                continue;
+
+            if (w->getPID() == currentPid)
+                candidates.push_back(w);
+        }
+    }
+
+    if (!(*PSWALLOWREGEX).empty())
+        std::erase_if(candidates, [&](const auto& other) { return !std::regex_match(other->m_szClass, std::regex(*PSWALLOWREGEX)); });
+
+    if (candidates.size() <= 0)
+        return nullptr;
+
+    if (!(*PSWALLOWEXREGEX).empty())
+        std::erase_if(candidates, [&](const auto& other) { return std::regex_match(other->m_szTitle, std::regex(*PSWALLOWEXREGEX)); });
+
+    if (candidates.size() <= 0)
+        return nullptr;
+
+    if (candidates.size() == 1)
+        return candidates.at(0);
+
+    // walk up the focus history and find the last focused
+    for (auto& w : g_pCompositor->m_vWindowFocusHistory) {
+        if (!w)
+            continue;
+
+        if (std::find(candidates.begin(), candidates.end(), w.lock()) != candidates.end())
+            return w.lock();
+    }
+
+    // if none are found (??) then just return the first one
+    return candidates.at(0);
 }

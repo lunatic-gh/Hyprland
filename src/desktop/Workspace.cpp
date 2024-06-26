@@ -2,6 +2,9 @@
 #include "../Compositor.hpp"
 #include "../config/ConfigValue.hpp"
 
+#include <hyprutils/string/String.hpp>
+using namespace Hyprutils::String;
+
 PHLWORKSPACE CWorkspace::create(int id, int monitorID, std::string name, bool special, bool isEmtpy) {
     PHLWORKSPACE workspace = makeShared<CWorkspace>(id, monitorID, name, special, isEmtpy);
     workspace->init(workspace);
@@ -54,6 +57,13 @@ void CWorkspace::init(PHLWORKSPACE self) {
     EMIT_HOOK_EVENT("createWorkspace", this);
 }
 
+SWorkspaceIDName CWorkspace::getPrevWorkspaceIDName(bool perMonitor) const {
+    if (perMonitor)
+        return m_sPrevWorkspacePerMonitor;
+
+    return m_sPrevWorkspace;
+}
+
 CWorkspace::~CWorkspace() {
     m_vRenderOffset.unregister();
 
@@ -101,24 +111,24 @@ void CWorkspace::startAnim(bool in, bool left, bool instant) {
         if (ANIMSTYLE.starts_with("slidefadevert")) {
             if (in) {
                 m_fAlpha.setValueAndWarp(0.f);
-                m_vRenderOffset.setValueAndWarp(Vector2D(0, (left ? PMONITOR->vecSize.y : -PMONITOR->vecSize.y) * (movePerc / 100.f)));
+                m_vRenderOffset.setValueAndWarp(Vector2D(0.0, (left ? PMONITOR->vecSize.y : -PMONITOR->vecSize.y) * (movePerc / 100.f)));
                 m_fAlpha        = 1.f;
                 m_vRenderOffset = Vector2D(0, 0);
             } else {
                 m_fAlpha.setValueAndWarp(1.f);
                 m_fAlpha        = 0.f;
-                m_vRenderOffset = Vector2D(0, (left ? -PMONITOR->vecSize.y : PMONITOR->vecSize.y) * (movePerc / 100.f));
+                m_vRenderOffset = Vector2D(0.0, (left ? -PMONITOR->vecSize.y : PMONITOR->vecSize.y) * (movePerc / 100.f));
             }
         } else {
             if (in) {
                 m_fAlpha.setValueAndWarp(0.f);
-                m_vRenderOffset.setValueAndWarp(Vector2D((left ? PMONITOR->vecSize.x : -PMONITOR->vecSize.x) * (movePerc / 100.f), 0));
+                m_vRenderOffset.setValueAndWarp(Vector2D((left ? PMONITOR->vecSize.x : -PMONITOR->vecSize.x) * (movePerc / 100.f), 0.0));
                 m_fAlpha        = 1.f;
                 m_vRenderOffset = Vector2D(0, 0);
             } else {
                 m_fAlpha.setValueAndWarp(1.f);
                 m_fAlpha        = 0.f;
-                m_vRenderOffset = Vector2D((left ? -PMONITOR->vecSize.x : PMONITOR->vecSize.x) * (movePerc / 100.f), 0);
+                m_vRenderOffset = Vector2D((left ? -PMONITOR->vecSize.x : PMONITOR->vecSize.x) * (movePerc / 100.f), 0.0);
             }
         }
     } else if (ANIMSTYLE == "fade") {
@@ -139,10 +149,10 @@ void CWorkspace::startAnim(bool in, bool left, bool instant) {
         m_fAlpha.setValueAndWarp(1.f); // fix a bug, if switching from fade -> slide.
 
         if (in) {
-            m_vRenderOffset.setValueAndWarp(Vector2D(0, left ? YDISTANCE : -YDISTANCE));
+            m_vRenderOffset.setValueAndWarp(Vector2D(0.0, left ? YDISTANCE : -YDISTANCE));
             m_vRenderOffset = Vector2D(0, 0);
         } else {
-            m_vRenderOffset = Vector2D(0, left ? -YDISTANCE : YDISTANCE);
+            m_vRenderOffset = Vector2D(0.0, left ? -YDISTANCE : YDISTANCE);
         }
     } else {
         // fallback is slide
@@ -152,10 +162,10 @@ void CWorkspace::startAnim(bool in, bool left, bool instant) {
         m_fAlpha.setValueAndWarp(1.f); // fix a bug, if switching from fade -> slide.
 
         if (in) {
-            m_vRenderOffset.setValueAndWarp(Vector2D(left ? XDISTANCE : -XDISTANCE, 0));
+            m_vRenderOffset.setValueAndWarp(Vector2D(left ? XDISTANCE : -XDISTANCE, 0.0));
             m_vRenderOffset = Vector2D(0, 0);
         } else {
-            m_vRenderOffset = Vector2D(left ? -XDISTANCE : XDISTANCE, 0);
+            m_vRenderOffset = Vector2D(left ? -XDISTANCE : XDISTANCE, 0.0);
         }
     }
 
@@ -193,7 +203,7 @@ PHLWINDOW CWorkspace::getLastFocusedWindow() {
 
 void CWorkspace::rememberPrevWorkspace(const PHLWORKSPACE& prev) {
     if (!prev) {
-        m_sPrevWorkspace.iID  = -1;
+        m_sPrevWorkspace.id   = -1;
         m_sPrevWorkspace.name = "";
         return;
     }
@@ -203,8 +213,13 @@ void CWorkspace::rememberPrevWorkspace(const PHLWORKSPACE& prev) {
         return;
     }
 
-    m_sPrevWorkspace.iID  = prev->m_iID;
+    m_sPrevWorkspace.id   = prev->m_iID;
     m_sPrevWorkspace.name = prev->m_szName;
+
+    if (prev->m_iMonitorID == m_iMonitorID) {
+        m_sPrevWorkspacePerMonitor.id   = prev->m_iID;
+        m_sPrevWorkspacePerMonitor.name = prev->m_szName;
+    }
 }
 
 std::string CWorkspace::getConfigName() {
@@ -219,15 +234,13 @@ std::string CWorkspace::getConfigName() {
 }
 
 bool CWorkspace::matchesStaticSelector(const std::string& selector_) {
-    auto selector = removeBeginEndSpacesTabs(selector_);
+    auto selector = trim(selector_);
 
     if (selector.empty())
         return true;
 
     if (isNumber(selector)) {
-
-        std::string wsname = "";
-        int         wsid   = getWorkspaceIDFromString(selector, wsname);
+        const auto& [wsid, wsname] = getWorkspaceIDNameFromString(selector);
 
         if (wsid == WORKSPACE_INVALID)
             return false;

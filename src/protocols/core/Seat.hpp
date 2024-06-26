@@ -15,7 +15,7 @@
 #include <wayland-server-protocol.h>
 #include "wayland.hpp"
 #include "../../helpers/signal/Signal.hpp"
-#include "../../helpers/Vector2D.hpp"
+#include "../../helpers/math/Math.hpp"
 
 constexpr const char* HL_SEAT_NAME = "Hyprland";
 
@@ -46,6 +46,8 @@ class CWLTouchResource {
     SP<CWlTouch>           resource;
     WP<CWLSurfaceResource> currentSurface;
 
+    int                    fingers = 0;
+
     struct {
         CHyprSignalListener destroySurface;
     } listeners;
@@ -73,6 +75,8 @@ class CWLPointerResource {
   private:
     SP<CWlPointer>         resource;
     WP<CWLSurfaceResource> currentSurface;
+
+    std::vector<uint32_t>  pressedButtons;
 
     struct {
         CHyprSignalListener destroySurface;

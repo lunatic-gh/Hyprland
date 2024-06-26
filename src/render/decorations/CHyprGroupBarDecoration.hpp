@@ -14,6 +14,9 @@ class CTitleTex {
 
     SP<CTexture> tex;
     std::string  szContent;
+    int          textWidth;
+    int          textHeight;
+
     PHLWINDOWREF pWindowOwner;
 };
 
@@ -45,7 +48,7 @@ class CHyprGroupBarDecoration : public IHyprWindowDecoration {
     virtual std::string                getDisplayName();
 
   private:
-    SWindowDecorationExtents m_seExtents;
+    SBoxExtents              m_seExtents;
 
     CBox                     m_bAssignedBox = {0};
 

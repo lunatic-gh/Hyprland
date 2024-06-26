@@ -4,9 +4,7 @@
 #include <csignal>
 #include <utility>
 
-#include "helpers/memory/WeakPtr.hpp"
-
-#define UP std::unique_ptr
+#include "helpers/memory/Memory.hpp"
 
 #ifndef NDEBUG
 #ifdef HYPRLAND_DEBUG
@@ -26,7 +24,8 @@
 
 #define STRVAL_EMPTY "[[EMPTY]]"
 
-#define WORKSPACE_INVALID -1L
+#define WORKSPACE_INVALID     -1L
+#define WORKSPACE_NOT_CHANGED -101
 
 #define LISTENER(name)                                                                                                                                                             \
     void               listener_##name(wl_listener*, void*);                                                                                                                       \
@@ -98,5 +97,12 @@
         if (err != GL_NO_ERROR) {                                                                                                                                                  \
             Debug::log(ERR, "[GLES] Error in call at {}@{}: 0x{:x}", __LINE__,                                                                                                     \
                        ([]() constexpr -> std::string { return std::string(__FILE__).substr(std::string(__FILE__).find_last_of('/') + 1); })(), err);                              \
+        }                                                                                                                                                                          \
+    }
+
+#define HYPRUTILS_FORWARD(ns, name)                                                                                                                                                \
+    namespace Hyprutils {                                                                                                                                                          \
+        namespace ns {                                                                                                                                                             \
+            class name;                                                                                                                                                            \
         }                                                                                                                                                                          \
     }

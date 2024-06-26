@@ -14,7 +14,7 @@
 #include <helpers/SdDaemon.hpp> // for SdNotify
 #endif
 #include <ranges>
-#include "helpers/VarList.hpp"
+#include "helpers/varlist/VarList.hpp"
 #include "protocols/FractionalScale.hpp"
 #include "protocols/PointerConstraints.hpp"
 #include "protocols/LayerShell.hpp"
@@ -24,8 +24,12 @@
 #include "desktop/LayerSurface.hpp"
 #include "xwayland/XWayland.hpp"
 
+#include <hyprutils/string/String.hpp>
+using namespace Hyprutils::String;
+
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 
 int handleCritSignal(int signo, void* data) {
     Debug::log(LOG, "Hyprland received signal {}", signo);
@@ -65,6 +69,37 @@ void handleUserSignal(int sig) {
         // means we have to unwind a timed out event
         throw std::exception();
     }
+}
+
+void CCompositor::bumpNofile() {
+    if (!getrlimit(RLIMIT_NOFILE, &m_sOriginalNofile))
+        Debug::log(LOG, "Old rlimit: soft -> {}, hard -> {}", m_sOriginalNofile.rlim_cur, m_sOriginalNofile.rlim_max);
+    else {
+        Debug::log(ERR, "Failed to get NOFILE rlimits");
+        m_sOriginalNofile.rlim_max = 0;
+        return;
+    }
+
+    rlimit newLimit = m_sOriginalNofile;
+
+    newLimit.rlim_cur = newLimit.rlim_max;
+
+    if (setrlimit(RLIMIT_NOFILE, &newLimit) < 0) {
+        Debug::log(ERR, "Failed bumping NOFILE limits higher");
+        m_sOriginalNofile.rlim_max = 0;
+        return;
+    }
+
+    if (!getrlimit(RLIMIT_NOFILE, &newLimit))
+        Debug::log(LOG, "New rlimit: soft -> {}, hard -> {}", newLimit.rlim_cur, newLimit.rlim_max);
+}
+
+void CCompositor::restoreNofile() {
+    if (m_sOriginalNofile.rlim_max <= 0)
+        return;
+
+    if (setrlimit(RLIMIT_NOFILE, &m_sOriginalNofile) < 0)
+        Debug::log(ERR, "Failed restoring NOFILE limits");
 }
 
 CCompositor::CCompositor() {
@@ -128,6 +163,8 @@ CCompositor::CCompositor() {
     setRandomSplash();
 
     Debug::log(LOG, "\nCurrent splash: {}\n\n", m_szCurrentSplash);
+
+    bumpNofile();
 }
 
 CCompositor::~CCompositor() {
@@ -274,10 +311,10 @@ void CCompositor::cleanEnvironment() {
     if (m_sWLRSession) {
         const auto CMD =
 #ifdef USES_SYSTEMD
-            "systemctl --user unset-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME && hash "
+            "systemctl --user unset-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS && hash "
             "dbus-update-activation-environment 2>/dev/null && "
 #endif
-            "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME";
+            "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS";
         g_pKeybindManager->spawn(CMD);
     }
 }
@@ -348,6 +385,8 @@ void CCompositor::cleanup() {
     g_pXWaylandManager.reset();
     g_pPointerManager.reset();
     g_pSeatManager.reset();
+    g_pHyprCtl.reset();
+    g_pEventLoopManager.reset();
 
     if (m_sWLRRenderer)
         wlr_renderer_destroy(m_sWLRRenderer);
@@ -361,6 +400,7 @@ void CCompositor::cleanup() {
     if (m_critSigSource)
         wl_event_source_remove(m_critSigSource);
 
+    wl_event_loop_destroy(m_sWLEventLoop);
     wl_display_terminate(m_sWLDisplay);
     m_sWLDisplay = nullptr;
 
@@ -403,6 +443,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
             g_pPointerManager = std::make_unique<CPointerManager>();
         } break;
         case STAGE_BASICINIT: {
+            Debug::log(LOG, "Creating the CHyprOpenGLImpl!");
+            g_pHyprOpenGL = std::make_unique<CHyprOpenGLImpl>();
+
             Debug::log(LOG, "Creating the ProtocolManager!");
             g_pProtocolManager = std::make_unique<CProtocolManager>();
 
@@ -418,9 +461,6 @@ void CCompositor::initManagers(eManagersInitStage stage) {
 
             Debug::log(LOG, "Creating the InputManager!");
             g_pInputManager = std::make_unique<CInputManager>();
-
-            Debug::log(LOG, "Creating the CHyprOpenGLImpl!");
-            g_pHyprOpenGL = std::make_unique<CHyprOpenGLImpl>();
 
             Debug::log(LOG, "Creating the HyprRenderer!");
             g_pHyprRenderer = std::make_unique<CHyprRenderer>();
@@ -529,10 +569,10 @@ void CCompositor::startCompositor() {
     if (m_sWLRSession /* Session-less Hyprland usually means a nest, don't update the env in that case */) {
         const auto CMD =
 #ifdef USES_SYSTEMD
-            "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME && hash "
+            "systemctl --user import-environment DISPLAY WAYLAND_DISPLAY HYPRLAND_INSTANCE_SIGNATURE XDG_CURRENT_DESKTOP QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS && hash "
             "dbus-update-activation-environment 2>/dev/null && "
 #endif
-            "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME";
+            "dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP HYPRLAND_INSTANCE_SIGNATURE QT_QPA_PLATFORMTHEME PATH XDG_DATA_DIRS";
         g_pKeybindManager->spawn(CMD);
     }
 
@@ -1056,7 +1096,7 @@ SP<CWLSurfaceResource> CCompositor::vectorToLayerSurface(const Vector2D& pos, st
         if (ls->fadingOut || !ls->layerSurface || (ls->layerSurface && !ls->layerSurface->surface->mapped) || ls->alpha.value() == 0.f)
             continue;
 
-        auto [surf, local] = ls->layerSurface->surface->at(pos - ls->geometry.pos());
+        auto [surf, local] = ls->layerSurface->surface->at(pos - ls->geometry.pos(), true);
 
         if (surf) {
             if (surf->current.input.empty())
@@ -1106,6 +1146,17 @@ PHLWINDOW CCompositor::getFullscreenWindowOnWorkspace(const int& ID) {
 
 bool CCompositor::isWorkspaceVisible(PHLWORKSPACE w) {
     return valid(w) && w->m_bVisible;
+}
+
+bool CCompositor::isWorkspaceVisibleNotCovered(PHLWORKSPACE w) {
+    if (!valid(w))
+        return false;
+
+    const auto PMONITOR = getMonitorFromID(w->m_iMonitorID);
+    if (PMONITOR->activeSpecialWorkspace)
+        return PMONITOR->activeSpecialWorkspace->m_iID == w->m_iID;
+
+    return PMONITOR->activeWorkspace->m_iID == w->m_iID;
 }
 
 PHLWORKSPACE CCompositor::getWorkspaceByID(const int& id) {
@@ -1347,6 +1398,10 @@ void CCompositor::addToFadingOutSafe(PHLLS pLS) {
     m_vSurfacesFadingOut.emplace_back(pLS);
 }
 
+void CCompositor::removeFromFadingOutSafe(PHLLS ls) {
+    std::erase(m_vSurfacesFadingOut, ls);
+}
+
 void CCompositor::addToFadingOutSafe(PHLWINDOW pWindow) {
     const auto FOUND = std::find_if(m_vWindowsFadingOut.begin(), m_vWindowsFadingOut.end(), [&](PHLWINDOWREF& other) { return other.lock() == pWindow; });
 
@@ -1370,8 +1425,7 @@ PHLWINDOW CCompositor::getWindowInDirection(PHLWINDOW pWindow, char dir) {
     if (!PMONITOR)
         return nullptr; // ??
 
-    const auto WINDOWIDEALBB = pWindow->m_bIsFullscreen ? wlr_box{(int)PMONITOR->vecPosition.x, (int)PMONITOR->vecPosition.y, (int)PMONITOR->vecSize.x, (int)PMONITOR->vecSize.y} :
-                                                          pWindow->getWindowIdealBoundingBoxIgnoreReserved();
+    const auto WINDOWIDEALBB = pWindow->m_bIsFullscreen ? CBox{PMONITOR->vecPosition, PMONITOR->vecSize} : pWindow->getWindowIdealBoundingBoxIgnoreReserved();
 
     const auto POSA  = Vector2D(WINDOWIDEALBB.x, WINDOWIDEALBB.y);
     const auto SIZEA = Vector2D(WINDOWIDEALBB.width, WINDOWIDEALBB.height);
@@ -1594,8 +1648,7 @@ PHLWORKSPACE CCompositor::getWorkspaceByString(const std::string& str) {
     }
 
     try {
-        std::string name = "";
-        return getWorkspaceByID(getWorkspaceIDFromString(str, name));
+        return getWorkspaceByID(getWorkspaceIDNameFromString(str).id);
     } catch (std::exception& e) { Debug::log(ERR, "Error in getWorkspaceByString, invalid id"); }
 
     return nullptr;
@@ -2084,9 +2137,11 @@ void CCompositor::moveWorkspaceToMonitor(PHLWORKSPACE pWorkspace, CMonitor* pMon
     if (POLDMON) {
         g_pLayoutManager->getCurrentLayout()->recalculateMonitor(POLDMON->ID);
         updateFullscreenFadeOnWorkspace(POLDMON->activeWorkspace);
+        updateSuspendedStates();
     }
 
     updateFullscreenFadeOnWorkspace(pWorkspace);
+    updateSuspendedStates();
 
     // event
     g_pEventManager->postEvent(SHyprIPCEvent{"moveworkspace", pWorkspace->m_szName + "," + pMonitor->szName});
