@@ -33,6 +33,10 @@ easy IPC, much more QoL stuff than other wlr-based compositors and more...
 
 </div>
 
+# What does this Fork change?
+- There's been a bug for a very long time now, causing many focus-related issues on a lot of XWayland Apps (eg. All Jetbrains IDE's), causing the App to lose focus whenever a popup is closed via the keyboard.
+- That's all really. I'll try to keep this Repo up to date with hyprland's commits, but sometimes it may take a few days, as i cannot manually do it every few hours.
+
 # Features
 
 - All of the eyecandy: gradient borders, blur, animations, shadows and much more
