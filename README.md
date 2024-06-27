@@ -39,7 +39,7 @@ easy IPC, much more QoL stuff than other wlr-based compositors and more...
 
 - The Installation Process is the exact same as present on the hyprland wiki. Install the required requirements, and then run the following:
 ```bash
-git clone https://github.com/lunatic-gh/Hyprland
+git clone https://github.com/lunatic-gh/Hyprland --recursive
 cd Hyprland/
 make all
 sudo make install
