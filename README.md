@@ -37,6 +37,14 @@ easy IPC, much more QoL stuff than other wlr-based compositors and more...
 - There's been a bug for a very long time now, causing many focus-related issues on a lot of XWayland Apps (eg. All Jetbrains IDE's), causing the App to lose focus whenever a popup is closed via the keyboard.
 - That's all really. I'll try to keep this Repo up to date with hyprland's commits, but sometimes it may take a few days, as i cannot manually do it every few hours.
 
+- The Installation Process is the exact same as present on the hyprland wiki. Install the required requirements, and then run the following:
+```bash
+git clone https://github.com/lunatic-gh/Hyprland
+cd Hyprland/
+make all
+sudo make install
+```
+
 # Features
 
 - All of the eyecandy: gradient borders, blur, animations, shadows and much more
