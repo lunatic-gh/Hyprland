@@ -29,8 +29,8 @@ void IHyprLayout::onWindowCreated(PHLWINDOW pWindow, eDirection direction) {
 }
 
 void IHyprLayout::onWindowRemoved(PHLWINDOW pWindow) {
-    if (pWindow->m_bIsFullscreen)
-        g_pCompositor->setWindowFullscreen(pWindow, false, FULLSCREEN_FULL);
+    if (pWindow->isFullscreen())
+        g_pCompositor->setWindowFullscreenInternal(pWindow, FSMODE_NONE);
 
     if (!pWindow->m_sGroupData.pNextWindow.expired()) {
         if (pWindow->m_sGroupData.pNextWindow.lock() == pWindow)
@@ -187,20 +187,20 @@ void IHyprLayout::onBeginDragWindow() {
     // Window will be floating. Let's check if it's valid. It should be, but I don't like crashing.
     if (!validMapped(DRAGGINGWINDOW)) {
         Debug::log(ERR, "Dragging attempted on an invalid window!");
-        g_pInputManager->currentlyDraggedWindow.reset();
+        g_pKeybindManager->changeMouseBindMode(MBIND_INVALID);
         return;
     }
 
-    if (DRAGGINGWINDOW->m_bIsFullscreen) {
+    if (DRAGGINGWINDOW->isFullscreen()) {
         Debug::log(LOG, "Dragging a fullscreen window");
-        g_pCompositor->setWindowFullscreen(DRAGGINGWINDOW, false, FULLSCREEN_FULL);
+        g_pCompositor->setWindowFullscreenInternal(DRAGGINGWINDOW, FSMODE_NONE);
     }
 
     const auto PWORKSPACE = DRAGGINGWINDOW->m_pWorkspace;
 
     if (PWORKSPACE->m_bHasFullscreenWindow && (!DRAGGINGWINDOW->m_bCreatedOverFullscreen || !DRAGGINGWINDOW->m_bIsFloating)) {
         Debug::log(LOG, "Rejecting drag on a fullscreen workspace. (window under fullscreen)");
-        g_pInputManager->currentlyDraggedWindow.reset();
+        g_pKeybindManager->changeMouseBindMode(MBIND_INVALID);
         return;
     }
 
@@ -288,7 +288,6 @@ void IHyprLayout::onEndDragWindow() {
     }
 
     g_pInputManager->unsetCursorImage();
-
     g_pInputManager->currentlyDraggedWindow.reset();
     g_pInputManager->m_bWasDraggingWindow = true;
 
@@ -325,12 +324,14 @@ void IHyprLayout::onEndDragWindow() {
 }
 
 void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
+    if (g_pInputManager->currentlyDraggedWindow.expired())
+        return;
+
     const auto DRAGGINGWINDOW = g_pInputManager->currentlyDraggedWindow.lock();
 
     // Window invalid or drag begin size 0,0 meaning we rejected it.
-    if (!validMapped(DRAGGINGWINDOW) || m_vBeginDragSizeXY == Vector2D()) {
-        onEndDragWindow();
-        g_pInputManager->currentlyDraggedWindow.reset();
+    if ((!validMapped(DRAGGINGWINDOW) || m_vBeginDragSizeXY == Vector2D())) {
+        g_pKeybindManager->changeMouseBindMode(MBIND_INVALID);
         return;
     }
 
@@ -386,8 +387,12 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
     } else if (g_pInputManager->dragMode == MBIND_RESIZE || g_pInputManager->dragMode == MBIND_RESIZE_FORCE_RATIO || g_pInputManager->dragMode == MBIND_RESIZE_BLOCK_RATIO) {
         if (DRAGGINGWINDOW->m_bIsFloating) {
 
-            Vector2D MINSIZE = g_pXWaylandManager->getMinSizeForWindow(DRAGGINGWINDOW).clamp(DRAGGINGWINDOW->m_sAdditionalConfigData.minSize.toUnderlying());
-            Vector2D MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW).clamp({}, DRAGGINGWINDOW->m_sAdditionalConfigData.maxSize.toUnderlying());
+            Vector2D MINSIZE = g_pXWaylandManager->getMinSizeForWindow(DRAGGINGWINDOW).clamp(DRAGGINGWINDOW->m_sWindowData.minSize.valueOr(Vector2D(20, 20)));
+            Vector2D MAXSIZE;
+            if (DRAGGINGWINDOW->m_sWindowData.maxSize.hasValue())
+                MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW).clamp({}, DRAGGINGWINDOW->m_sWindowData.maxSize.value());
+            else
+                MAXSIZE = g_pXWaylandManager->getMaxSizeForWindow(DRAGGINGWINDOW).clamp({}, Vector2D(std::numeric_limits<double>::max(), std::numeric_limits<double>::max()));
 
             Vector2D newSize = m_vBeginDragSizeXY;
             Vector2D newPos  = m_vBeginDragPositionXY;
@@ -403,7 +408,7 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
 
             if ((m_vBeginDragSizeXY.x >= 1 && m_vBeginDragSizeXY.y >= 1) &&
                 (g_pInputManager->dragMode == MBIND_RESIZE_FORCE_RATIO ||
-                 (!(g_pInputManager->dragMode == MBIND_RESIZE_BLOCK_RATIO) && DRAGGINGWINDOW->m_sAdditionalConfigData.keepAspectRatio))) {
+                 (!(g_pInputManager->dragMode == MBIND_RESIZE_BLOCK_RATIO) && DRAGGINGWINDOW->m_sWindowData.keepAspectRatio.valueOrDefault()))) {
 
                 const float RATIO = m_vBeginDragSizeXY.y / m_vBeginDragSizeXY.x;
 
@@ -470,9 +475,9 @@ void IHyprLayout::onMouseMove(const Vector2D& mousePos) {
 
 void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
 
-    if (pWindow->m_bIsFullscreen) {
+    if (pWindow->isFullscreen()) {
         Debug::log(LOG, "changeWindowFloatingMode: fullscreen");
-        g_pCompositor->setWindowFullscreen(pWindow, false, FULLSCREEN_FULL);
+        g_pCompositor->setWindowFullscreenInternal(pWindow, FSMODE_NONE);
     }
 
     pWindow->m_bPinned = false;
@@ -492,7 +497,7 @@ void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
         const auto PWORKSPACE = PNEWMON->activeSpecialWorkspace ? PNEWMON->activeSpecialWorkspace : PNEWMON->activeWorkspace;
 
         if (PWORKSPACE->m_bHasFullscreenWindow)
-            g_pCompositor->setWindowFullscreen(g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID), false);
+            g_pCompositor->setWindowFullscreenInternal(g_pCompositor->getFullscreenWindowOnWorkspace(PWORKSPACE->m_iID), FSMODE_NONE);
 
         // save real pos cuz the func applies the default 5,5 mid
         const auto PSAVEDPOS  = pWindow->m_vRealPosition.goal();
@@ -538,7 +543,8 @@ void IHyprLayout::changeWindowFloatingMode(PHLWINDOW pWindow) {
 
         g_pHyprRenderer->damageMonitor(g_pCompositor->getMonitorFromID(pWindow->m_iMonitorID));
 
-        pWindow->updateSpecialRenderData();
+        pWindow->unsetWindowData(PRIORITY_LAYOUT);
+        pWindow->updateWindowData();
 
         if (pWindow == m_pLastTiledWindow)
             m_pLastTiledWindow.reset();
@@ -587,7 +593,7 @@ PHLWINDOW IHyprLayout::getNextWindowCandidate(PHLWINDOW pWindow) {
         // find whether there is a floating window below this one
         for (auto& w : g_pCompositor->m_vWindows) {
             if (w->m_bIsMapped && !w->isHidden() && w->m_bIsFloating && w->m_iX11Type != 2 && w->m_pWorkspace == pWindow->m_pWorkspace && !w->m_bX11ShouldntFocus &&
-                !w->m_sAdditionalConfigData.noFocus && w != pWindow) {
+                !w->m_sWindowData.noFocus.valueOrDefault() && w != pWindow) {
                 if (VECINRECT((pWindow->m_vSize / 2.f + pWindow->m_vPosition), w->m_vPosition.x, w->m_vPosition.y, w->m_vPosition.x + w->m_vSize.x,
                               w->m_vPosition.y + w->m_vSize.y)) {
                     return w;
@@ -607,7 +613,7 @@ PHLWINDOW IHyprLayout::getNextWindowCandidate(PHLWINDOW pWindow) {
         // if not, floating window
         for (auto& w : g_pCompositor->m_vWindows) {
             if (w->m_bIsMapped && !w->isHidden() && w->m_bIsFloating && w->m_iX11Type != 2 && w->m_pWorkspace == pWindow->m_pWorkspace && !w->m_bX11ShouldntFocus &&
-                !w->m_sAdditionalConfigData.noFocus && w != pWindow)
+                !w->m_sWindowData.noFocus.valueOrDefault() && w != pWindow)
                 return w;
         }
 

@@ -24,6 +24,7 @@ class CWLSurface;
 class CWLSurfaceResource;
 class CWLSubsurfaceResource;
 class CViewportResource;
+class CDRMSyncobjSurfaceResource;
 
 class CWLCallbackResource {
   public:
@@ -74,6 +75,7 @@ class CWLSurfaceResource {
     Vector2D                      sourceSize();
 
     struct {
+        CSignal precommit;
         CSignal commit;
         CSignal map;
         CSignal unmap;
@@ -81,20 +83,21 @@ class CWLSurfaceResource {
         CSignal destroy;
     } events;
 
-    struct {
-        CRegion             opaque, input = CBox{{}, {INT32_MAX, INT32_MAX}}, damage, bufferDamage = CBox{{}, {INT32_MAX, INT32_MAX}} /* initial damage */;
-        wl_output_transform transform = WL_OUTPUT_TRANSFORM_NORMAL;
-        int                 scale     = 1;
-        SP<IWLBuffer>       buffer;
-        SP<CTexture>        texture;
-        Vector2D            offset;
-        Vector2D            size;
+    struct SState {
+        CRegion                opaque, input = CBox{{}, {INT32_MAX, INT32_MAX}}, damage, bufferDamage = CBox{{}, {INT32_MAX, INT32_MAX}} /* initial damage */;
+        wl_output_transform    transform = WL_OUTPUT_TRANSFORM_NORMAL;
+        int                    scale     = 1;
+        SP<CHLBufferReference> buffer; // buffer ref will be released once the buffer is no longer locked. For checking if a buffer is attached to this state, check texture.
+        SP<CTexture>           texture;
+        Vector2D               offset;
+        Vector2D               size, bufferSize;
         struct {
             bool     hasDestination = false;
             bool     hasSource      = false;
             Vector2D destination;
             CBox     source;
         } viewport;
+        bool rejected = false;
 
         //
         void reset() {
@@ -113,11 +116,15 @@ class CWLSurfaceResource {
     std::vector<WP<CMonitor>>              enteredOutputs;
     bool                                   mapped = false;
     std::vector<WP<CWLSubsurfaceResource>> subsurfaces;
-    WP<ISurfaceRole>                       role;
+    SP<ISurfaceRole>                       role;
     WP<CViewportResource>                  viewportResource;
+    WP<CDRMSyncobjSurfaceResource>         syncobj; // may not be present
 
     void                                   breadthfirst(std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data);
     CRegion                                accumulateCurrentBufferDamage();
+    void                                   presentFeedback(timespec* when, CMonitor* pMonitor, bool needsExplicitSync = false);
+    void                                   lockPendingState();
+    void                                   unlockPendingState();
 
     // returns a pair: found surface (null if not found) and surface local coords.
     // localCoords param is relative to 0,0 of this surface
@@ -127,11 +134,21 @@ class CWLSurfaceResource {
     SP<CWlSurface> resource;
     wl_client*     pClient = nullptr;
 
-    // tracks whether we should release the buffer
-    bool bufferReleased = false;
+    // this is for cursor dumb copy. Due to our (and wayland's...) architecture,
+    // this stupid-ass hack is used
+    WP<IHLBuffer> lastBuffer;
 
-    void destroy();
-    void bfHelper(std::vector<SP<CWLSurfaceResource>> nodes, std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data);
+    int           stateLocks = 0;
+
+    void          destroy();
+    void          releaseBuffers(bool onlyCurrent = true);
+    void          dropPendingBuffer();
+    void          dropCurrentBuffer();
+    void          commitPendingState();
+    void          bfHelper(std::vector<SP<CWLSurfaceResource>> nodes, std::function<void(SP<CWLSurfaceResource>, const Vector2D&, void*)> fn, void* data);
+    void          updateCursorShm();
+
+    friend class CWLPointerResource;
 };
 
 class CWLCompositorResource {

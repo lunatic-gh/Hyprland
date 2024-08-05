@@ -18,12 +18,13 @@
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <filesystem>
 
 // TODO: cleanup
 static bool set_cloexec(int fd, bool cloexec) {
     int flags = fcntl(fd, F_GETFD);
     if (flags == -1) {
-        wlr_log_errno(WLR_ERROR, "fcntl failed");
+        Debug::log(ERR, "fcntl failed");
         return false;
     }
     if (cloexec) {
@@ -32,7 +33,7 @@ static bool set_cloexec(int fd, bool cloexec) {
         flags = flags & ~FD_CLOEXEC;
     }
     if (fcntl(fd, F_SETFD, flags) == -1) {
-        wlr_log_errno(WLR_ERROR, "fcntl failed");
+        Debug::log(ERR, "fcntl failed");
         return false;
     }
     return true;
@@ -44,7 +45,7 @@ static int openSocket(struct sockaddr_un* addr, size_t path_size) {
 
     fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) {
-        wlr_log_errno(WLR_ERROR, "Failed to create socket %c%s", addr->sun_path[0] ? addr->sun_path[0] : '@', addr->sun_path + 1);
+        Debug::log(ERR, "failed to create socket {}{}", addr->sun_path[0] ? addr->sun_path[0] : '@', addr->sun_path + 1);
         return -1;
     }
     if (!set_cloexec(fd, true)) {
@@ -57,12 +58,12 @@ static int openSocket(struct sockaddr_un* addr, size_t path_size) {
     }
     if (bind(fd, (struct sockaddr*)addr, size) < 0) {
         rc = errno;
-        wlr_log_errno(WLR_ERROR, "Failed to bind socket %c%s", addr->sun_path[0] ? addr->sun_path[0] : '@', addr->sun_path + 1);
+        Debug::log(ERR, "failed to bind socket {}{}", addr->sun_path[0] ? addr->sun_path[0] : '@', addr->sun_path + 1);
         goto cleanup;
     }
     if (listen(fd, 1) < 0) {
         rc = errno;
-        wlr_log_errno(WLR_ERROR, "Failed to listen to socket %c%s", addr->sun_path[0] ? addr->sun_path[0] : '@', addr->sun_path + 1);
+        Debug::log(ERR, "failed to listen to socket {}{}", addr->sun_path[0] ? addr->sun_path[0] : '@', addr->sun_path + 1);
         goto cleanup;
     }
 
@@ -261,13 +262,16 @@ void CXWaylandServer::die() {
     if (pipeSource)
         wl_event_source_remove(pipeSource);
 
-    if (waylandFDs[0])
+    if (pipeFd >= 0)
+        close(pipeFd);
+
+    if (waylandFDs[0] >= 0)
         close(waylandFDs[0]);
-    if (waylandFDs[1])
+    if (waylandFDs[1] >= 0)
         close(waylandFDs[1]);
-    if (xwmFDs[0])
+    if (xwmFDs[0] >= 0)
         close(xwmFDs[0]);
-    if (xwmFDs[1])
+    if (xwmFDs[1] >= 0)
         close(xwmFDs[1]);
 
     // possible crash. Better to leak a bit.
@@ -363,6 +367,7 @@ bool CXWaylandServer::start() {
     }
 
     pipeSource = wl_event_loop_add_fd(g_pCompositor->m_sWLEventLoop, notify[0], WL_EVENT_READABLE, ::xwaylandReady, nullptr);
+    pipeFd     = notify[0];
 
     serverPID = fork();
     if (serverPID < 0) {

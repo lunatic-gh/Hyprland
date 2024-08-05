@@ -2,6 +2,7 @@
 #include "Compositor.hpp"
 #include "DataDevice.hpp"
 #include "../../devices/IKeyboard.hpp"
+#include "../../devices/IHID.hpp"
 #include "../../managers/SeatManager.hpp"
 #include "../../config/ConfigValue.hpp"
 #include <algorithm>
@@ -26,6 +27,9 @@ void CWLTouchResource::sendDown(SP<CWLSurfaceResource> surface, uint32_t timeMs,
     if (!owner)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
+        return;
+
     ASSERT(surface->client() == owner->client());
 
     currentSurface           = surface;
@@ -38,6 +42,9 @@ void CWLTouchResource::sendDown(SP<CWLSurfaceResource> surface, uint32_t timeMs,
 
 void CWLTouchResource::sendUp(uint32_t timeMs, int32_t id) {
     if (!owner)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
         return;
 
     resource->sendUp(g_pSeatManager->nextSerial(owner.lock()), timeMs, id);
@@ -53,11 +60,17 @@ void CWLTouchResource::sendMotion(uint32_t timeMs, int32_t id, const Vector2D& l
     if (!owner)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
+        return;
+
     resource->sendMotion(timeMs, id, wl_fixed_from_double(local.x), wl_fixed_from_double(local.y));
 }
 
 void CWLTouchResource::sendFrame() {
     if (!owner)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
         return;
 
     resource->sendFrame();
@@ -67,6 +80,9 @@ void CWLTouchResource::sendCancel() {
     if (!owner || !currentSurface)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
+        return;
+
     resource->sendCancel();
 }
 
@@ -74,11 +90,17 @@ void CWLTouchResource::sendShape(int32_t id, const Vector2D& shape) {
     if (!owner || !currentSurface || resource->version() < 6)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
+        return;
+
     resource->sendShape(id, wl_fixed_from_double(shape.x), wl_fixed_from_double(shape.y));
 }
 
 void CWLTouchResource::sendOrientation(int32_t id, double angle) {
     if (!owner || !currentSurface || resource->version() < 6)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_TOUCH))
         return;
 
     resource->sendOrientation(id, wl_fixed_from_double(angle));
@@ -97,7 +119,19 @@ CWLPointerResource::CWLPointerResource(SP<CWlPointer> resource_, SP<CWLSeatResou
             return;
         }
 
-        g_pSeatManager->onSetCursor(owner.lock(), serial, surf ? CWLSurfaceResource::fromResource(surf) : nullptr, {hotX, hotY});
+        auto surfResource = surf ? CWLSurfaceResource::fromResource(surf) : nullptr;
+
+        if (surfResource && surfResource->role->role() != SURFACE_ROLE_CURSOR && surfResource->role->role() != SURFACE_ROLE_UNASSIGNED) {
+            r->error(-1, "Cursor surface already has a different role");
+            return;
+        }
+
+        if (surfResource) {
+            surfResource->role = makeShared<CCursorSurfaceRole>();
+            surfResource->updateCursorShm();
+        }
+
+        g_pSeatManager->onSetCursor(owner.lock(), serial, surfResource, {hotX, hotY});
     });
 
     if (g_pSeatManager->state.pointerFocus && g_pSeatManager->state.pointerFocus->client() == resource->client())
@@ -110,6 +144,9 @@ bool CWLPointerResource::good() {
 
 void CWLPointerResource::sendEnter(SP<CWLSurfaceResource> surface, const Vector2D& local) {
     if (!owner || currentSurface == surface)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
         return;
 
     if (currentSurface) {
@@ -127,6 +164,9 @@ void CWLPointerResource::sendEnter(SP<CWLSurfaceResource> surface, const Vector2
 
 void CWLPointerResource::sendLeave() {
     if (!owner || !currentSurface)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
         return;
 
     // release all buttons unless we have a dnd going on in which case
@@ -150,11 +190,17 @@ void CWLPointerResource::sendMotion(uint32_t timeMs, const Vector2D& local) {
     if (!owner || !currentSurface)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
+        return;
+
     resource->sendMotion(timeMs, wl_fixed_from_double(local.x), wl_fixed_from_double(local.y));
 }
 
 void CWLPointerResource::sendButton(uint32_t timeMs, uint32_t button, wl_pointer_button_state state) {
     if (!owner || !currentSurface)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
         return;
 
     if (state == WL_POINTER_BUTTON_STATE_RELEASED && std::find(pressedButtons.begin(), pressedButtons.end(), button) == pressedButtons.end()) {
@@ -177,11 +223,17 @@ void CWLPointerResource::sendAxis(uint32_t timeMs, wl_pointer_axis axis, double 
     if (!owner || !currentSurface)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
+        return;
+
     resource->sendAxis(timeMs, axis, wl_fixed_from_double(value));
 }
 
 void CWLPointerResource::sendFrame() {
     if (!owner || resource->version() < 5)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
         return;
 
     resource->sendFrame();
@@ -191,11 +243,17 @@ void CWLPointerResource::sendAxisSource(wl_pointer_axis_source source) {
     if (!owner || !currentSurface || resource->version() < 5)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
+        return;
+
     resource->sendAxisSource(source);
 }
 
 void CWLPointerResource::sendAxisStop(uint32_t timeMs, wl_pointer_axis axis) {
     if (!owner || !currentSurface || resource->version() < 5)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
         return;
 
     resource->sendAxisStop(timeMs, axis);
@@ -205,6 +263,9 @@ void CWLPointerResource::sendAxisDiscrete(wl_pointer_axis axis, int32_t discrete
     if (!owner || !currentSurface || resource->version() < 5)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
+        return;
+
     resource->sendAxisDiscrete(axis, discrete);
 }
 
@@ -212,11 +273,17 @@ void CWLPointerResource::sendAxisValue120(wl_pointer_axis axis, int32_t value120
     if (!owner || !currentSurface || resource->version() < 8)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
+        return;
+
     resource->sendAxisValue120(axis, value120);
 }
 
 void CWLPointerResource::sendAxisRelativeDirection(wl_pointer_axis axis, wl_pointer_axis_relative_direction direction) {
     if (!owner || !currentSurface || resource->version() < 9)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_POINTER))
         return;
 
     resource->sendAxisRelativeDirection(axis, direction);
@@ -249,12 +316,15 @@ void CWLKeyboardResource::sendKeymap(SP<IKeyboard> keyboard) {
     if (!keyboard)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
+        return;
+
     wl_keyboard_keymap_format format = keyboard ? WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1 : WL_KEYBOARD_KEYMAP_FORMAT_NO_KEYMAP;
     int                       fd;
     uint32_t                  size;
     if (keyboard) {
-        fd   = keyboard->wlr()->keymap_fd;
-        size = keyboard->wlr()->keymap_size;
+        fd   = keyboard->xkbKeymapFD;
+        size = keyboard->xkbKeymapString.length() + 1;
     } else {
         fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
         if (fd < 0) {
@@ -272,6 +342,9 @@ void CWLKeyboardResource::sendKeymap(SP<IKeyboard> keyboard) {
 
 void CWLKeyboardResource::sendEnter(SP<CWLSurfaceResource> surface) {
     if (!owner || currentSurface == surface)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
         return;
 
     if (currentSurface) {
@@ -296,6 +369,9 @@ void CWLKeyboardResource::sendLeave() {
     if (!owner || !currentSurface)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
+        return;
+
     resource->sendLeave(g_pSeatManager->nextSerial(owner.lock()), currentSurface->getResource().get());
     currentSurface.reset();
     listeners.destroySurface.reset();
@@ -305,11 +381,17 @@ void CWLKeyboardResource::sendKey(uint32_t timeMs, uint32_t key, wl_keyboard_key
     if (!owner || !currentSurface)
         return;
 
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
+        return;
+
     resource->sendKey(g_pSeatManager->nextSerial(owner.lock()), timeMs, key, state);
 }
 
 void CWLKeyboardResource::sendMods(uint32_t depressed, uint32_t latched, uint32_t locked, uint32_t group) {
     if (!owner || !currentSurface)
+        return;
+
+    if (!(PROTO::seat->currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
         return;
 
     resource->sendModifiers(g_pSeatManager->nextSerial(owner.lock()), depressed, latched, locked, group);
@@ -451,12 +533,18 @@ void CWLSeatProtocol::updateCapabilities(uint32_t caps) {
 }
 
 void CWLSeatProtocol::updateKeymap() {
+    if (!(currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
+        return;
+
     for (auto& k : m_vKeyboards) {
         k->sendKeymap(g_pSeatManager->keyboard.lock());
     }
 }
 
 void CWLSeatProtocol::updateRepeatInfo(uint32_t rate, uint32_t delayMs) {
+    if (!(currentCaps & eHIDCapabilityType::HID_INPUT_CAPABILITY_KEYBOARD))
+        return;
+
     for (auto& k : m_vKeyboards) {
         k->repeatInfo(rate, delayMs);
     }
@@ -469,4 +557,11 @@ SP<CWLSeatResource> CWLSeatProtocol::seatResourceForClient(wl_client* client) {
     }
 
     return nullptr;
+}
+
+std::vector<uint8_t>& CCursorSurfaceRole::cursorPixelData(SP<CWLSurfaceResource> surface) {
+    RASSERT(surface->role->role() == SURFACE_ROLE_CURSOR, "cursorPixelData called on a non-cursor surface");
+
+    auto role = (CCursorSurfaceRole*)surface->role.get();
+    return role->cursorShmPixelData;
 }

@@ -1,5 +1,6 @@
 #include "EventLoopManager.hpp"
 #include "../../debug/Log.hpp"
+#include "../../Compositor.hpp"
 
 #include <algorithm>
 #include <limits>
@@ -7,15 +8,27 @@
 #include <sys/timerfd.h>
 #include <time.h>
 
+#include <aquamarine/backend/Backend.hpp>
+
 #define TIMESPEC_NSEC_PER_SEC 1000000000L
 
-CEventLoopManager::CEventLoopManager() {
-    m_sTimers.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+CEventLoopManager::CEventLoopManager(wl_display* display, wl_event_loop* wlEventLoop) {
+    m_sTimers.timerfd  = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    m_sWayland.loop    = wlEventLoop;
+    m_sWayland.display = display;
 }
 
 CEventLoopManager::~CEventLoopManager() {
+    for (auto& eventSource : m_sWayland.aqEventSources) {
+        wl_event_source_remove(eventSource);
+    }
+
     if (m_sWayland.eventSource)
         wl_event_source_remove(m_sWayland.eventSource);
+    if (m_sIdle.eventSource)
+        wl_event_source_remove(m_sIdle.eventSource);
+    if (m_sTimers.timerfd >= 0)
+        close(m_sTimers.timerfd);
 }
 
 static int timerWrite(int fd, uint32_t mask, void* data) {
@@ -23,13 +36,22 @@ static int timerWrite(int fd, uint32_t mask, void* data) {
     return 1;
 }
 
-void CEventLoopManager::enterLoop(wl_display* display, wl_event_loop* wlEventLoop) {
-    m_sWayland.loop    = wlEventLoop;
-    m_sWayland.display = display;
+static int aquamarineFDWrite(int fd, uint32_t mask, void* data) {
+    auto POLLFD = (Aquamarine::SPollFD*)data;
+    POLLFD->onSignal();
+    return 1;
+}
 
-    m_sWayland.eventSource = wl_event_loop_add_fd(wlEventLoop, m_sTimers.timerfd, WL_EVENT_READABLE, timerWrite, nullptr);
+void CEventLoopManager::enterLoop() {
+    m_sWayland.eventSource = wl_event_loop_add_fd(m_sWayland.loop, m_sTimers.timerfd, WL_EVENT_READABLE, timerWrite, nullptr);
 
-    wl_display_run(display);
+    aqPollFDs = g_pCompositor->m_pAqBackend->getPollFDs();
+    for (auto& fd : aqPollFDs) {
+        m_sWayland.aqEventSources.emplace_back(wl_event_loop_add_fd(m_sWayland.loop, fd->fd, WL_EVENT_READABLE, aquamarineFDWrite, fd.get()));
+        fd->onSignal(); // dispatch outstanding
+    }
+
+    wl_display_run(m_sWayland.display);
 
     Debug::log(LOG, "Kicked off the event loop! :(");
 }
@@ -86,4 +108,25 @@ void CEventLoopManager::nudgeTimers() {
     itimerspec ts = {.it_value = now};
 
     timerfd_settime(m_sTimers.timerfd, TFD_TIMER_ABSTIME, &ts, nullptr);
+}
+
+void CEventLoopManager::doLater(const std::function<void()>& fn) {
+    m_sIdle.fns.emplace_back(fn);
+
+    if (m_sIdle.eventSource)
+        return;
+
+    m_sIdle.eventSource = wl_event_loop_add_idle(
+        m_sWayland.loop,
+        [](void* data) {
+            auto IDLE = (CEventLoopManager::SIdleData*)data;
+            auto cpy  = IDLE->fns;
+            IDLE->fns.clear();
+            IDLE->eventSource = nullptr;
+            for (auto& c : cpy) {
+                if (c)
+                    c();
+            }
+        },
+        &m_sIdle);
 }

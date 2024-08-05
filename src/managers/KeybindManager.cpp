@@ -3,11 +3,14 @@
 #include "../managers/SeatManager.hpp"
 #include "../protocols/LayerShell.hpp"
 #include "../protocols/ShortcutsInhibit.hpp"
+#include "../protocols/GlobalShortcuts.hpp"
 #include "../render/decorations/CHyprGroupBarDecoration.hpp"
+#include "../devices/IKeyboard.hpp"
 #include "KeybindManager.hpp"
 #include "PointerManager.hpp"
 #include "Compositor.hpp"
 #include "TokenManager.hpp"
+#include "eventLoop/EventLoopManager.hpp"
 #include "debug/Log.hpp"
 #include "helpers/varlist/VarList.hpp"
 
@@ -15,6 +18,7 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <cstring>
 
 #include <hyprutils/string/String.hpp>
 using namespace Hyprutils::String;
@@ -33,7 +37,7 @@ using namespace Hyprutils::String;
 static std::vector<std::pair<std::string, std::string>> getHyprlandLaunchEnv() {
     static auto PINITIALWSTRACKING = CConfigValue<Hyprlang::INT>("misc:initial_workspace_tracking");
 
-    if (!*PINITIALWSTRACKING)
+    if (!*PINITIALWSTRACKING || g_pConfigManager->isLaunchingExecOnce)
         return {};
 
     const auto PMONITOR = g_pCompositor->m_pLastMonitor;
@@ -64,7 +68,7 @@ CKeybindManager::CKeybindManager() {
     m_mDispatchers["workspace"]                      = changeworkspace;
     m_mDispatchers["renameworkspace"]                = renameWorkspace;
     m_mDispatchers["fullscreen"]                     = fullscreenActive;
-    m_mDispatchers["fakefullscreen"]                 = fakeFullscreenActive;
+    m_mDispatchers["fullscreenstate"]                = fullscreenStateActive;
     m_mDispatchers["movetoworkspace"]                = moveActiveToWorkspace;
     m_mDispatchers["movetoworkspacesilent"]          = moveActiveToWorkspaceSilent;
     m_mDispatchers["pseudo"]                         = toggleActivePseudo;
@@ -98,7 +102,6 @@ CKeybindManager::CKeybindManager() {
     m_mDispatchers["pass"]                           = pass;
     m_mDispatchers["sendshortcut"]                   = sendshortcut;
     m_mDispatchers["layoutmsg"]                      = layoutmsg;
-    m_mDispatchers["toggleopaque"]                   = toggleOpaque;
     m_mDispatchers["dpms"]                           = dpms;
     m_mDispatchers["movewindowpixel"]                = moveWindow;
     m_mDispatchers["resizewindowpixel"]              = resizeWindow;
@@ -157,37 +160,37 @@ uint32_t CKeybindManager::stringToModMask(std::string mods) {
     uint32_t modMask = 0;
     std::transform(mods.begin(), mods.end(), mods.begin(), ::toupper);
     if (mods.contains("SHIFT"))
-        modMask |= WLR_MODIFIER_SHIFT;
+        modMask |= HL_MODIFIER_SHIFT;
     if (mods.contains("CAPS"))
-        modMask |= WLR_MODIFIER_CAPS;
+        modMask |= HL_MODIFIER_CAPS;
     if (mods.contains("CTRL") || mods.contains("CONTROL"))
-        modMask |= WLR_MODIFIER_CTRL;
+        modMask |= HL_MODIFIER_CTRL;
     if (mods.contains("ALT") || mods.contains("MOD1"))
-        modMask |= WLR_MODIFIER_ALT;
+        modMask |= HL_MODIFIER_ALT;
     if (mods.contains("MOD2"))
-        modMask |= WLR_MODIFIER_MOD2;
+        modMask |= HL_MODIFIER_MOD2;
     if (mods.contains("MOD3"))
-        modMask |= WLR_MODIFIER_MOD3;
-    if (mods.contains("SUPER") || mods.contains("WIN") || mods.contains("LOGO") || mods.contains("MOD4"))
-        modMask |= WLR_MODIFIER_LOGO;
+        modMask |= HL_MODIFIER_MOD3;
+    if (mods.contains("SUPER") || mods.contains("WIN") || mods.contains("LOGO") || mods.contains("MOD4") || mods.contains("META"))
+        modMask |= HL_MODIFIER_META;
     if (mods.contains("MOD5"))
-        modMask |= WLR_MODIFIER_MOD5;
+        modMask |= HL_MODIFIER_MOD5;
 
     return modMask;
 }
 
 uint32_t CKeybindManager::keycodeToModifier(xkb_keycode_t keycode) {
     switch (keycode - 8) {
-        case KEY_LEFTMETA: return WLR_MODIFIER_LOGO;
-        case KEY_RIGHTMETA: return WLR_MODIFIER_LOGO;
-        case KEY_LEFTSHIFT: return WLR_MODIFIER_SHIFT;
-        case KEY_RIGHTSHIFT: return WLR_MODIFIER_SHIFT;
-        case KEY_LEFTCTRL: return WLR_MODIFIER_CTRL;
-        case KEY_RIGHTCTRL: return WLR_MODIFIER_CTRL;
-        case KEY_LEFTALT: return WLR_MODIFIER_ALT;
-        case KEY_RIGHTALT: return WLR_MODIFIER_ALT;
-        case KEY_CAPSLOCK: return WLR_MODIFIER_CAPS;
-        case KEY_NUMLOCK: return WLR_MODIFIER_MOD2;
+        case KEY_LEFTMETA: return HL_MODIFIER_META;
+        case KEY_RIGHTMETA: return HL_MODIFIER_META;
+        case KEY_LEFTSHIFT: return HL_MODIFIER_SHIFT;
+        case KEY_RIGHTSHIFT: return HL_MODIFIER_SHIFT;
+        case KEY_LEFTCTRL: return HL_MODIFIER_CTRL;
+        case KEY_RIGHTCTRL: return HL_MODIFIER_CTRL;
+        case KEY_LEFTALT: return HL_MODIFIER_ALT;
+        case KEY_RIGHTALT: return HL_MODIFIER_ALT;
+        case KEY_CAPSLOCK: return HL_MODIFIER_CAPS;
+        case KEY_NUMLOCK: return HL_MODIFIER_MOD2;
         default: return 0;
     }
 }
@@ -240,26 +243,13 @@ void CKeybindManager::updateXKBTranslationState() {
 }
 
 bool CKeybindManager::ensureMouseBindState() {
-    if (!m_bIsMouseBindActive)
+    if (!g_pInputManager->currentlyDraggedWindow)
         return false;
 
     if (!g_pInputManager->currentlyDraggedWindow.expired()) {
-        PHLWINDOW lastDraggedWindow = g_pInputManager->currentlyDraggedWindow.lock();
-
-        m_bIsMouseBindActive = false;
-        g_pLayoutManager->getCurrentLayout()->onEndDragWindow();
-        g_pInputManager->currentlyDraggedWindow.reset();
-        g_pInputManager->dragMode = MBIND_INVALID;
-
-        g_pCompositor->updateWorkspaceWindows(lastDraggedWindow->workspaceID());
-        g_pCompositor->updateWorkspaceSpecialRenderData(lastDraggedWindow->workspaceID());
-        g_pLayoutManager->getCurrentLayout()->recalculateMonitor(lastDraggedWindow->m_iMonitorID);
-        g_pCompositor->updateAllWindowsAnimatedDecorationValues();
-
+        changeMouseBindMode(MBIND_INVALID);
         return true;
     }
-
-    m_bIsMouseBindActive = false;
 
     return false;
 }
@@ -279,13 +269,18 @@ bool CKeybindManager::tryMoveFocusToMonitor(CMonitor* monitor) {
         return false;
 
     const auto LASTMONITOR = g_pCompositor->m_pLastMonitor.get();
+    if (!LASTMONITOR)
+        return false;
     if (LASTMONITOR == monitor) {
         Debug::log(LOG, "Tried to move to active monitor");
         return false;
     }
 
-    const auto PWORKSPACE        = g_pCompositor->m_pLastMonitor->activeWorkspace;
-    const auto PNEWMAINWORKSPACE = monitor->activeWorkspace;
+    static auto PFOLLOWMOUSE = CConfigValue<Hyprlang::INT>("input:follow_mouse");
+    static auto PNOWARPS     = CConfigValue<Hyprlang::INT>("cursor:no_warps");
+
+    const auto  PWORKSPACE        = g_pCompositor->m_pLastMonitor->activeWorkspace;
+    const auto  PNEWMAINWORKSPACE = monitor->activeWorkspace;
 
     g_pInputManager->unconstrainMouse();
     PNEWMAINWORKSPACE->rememberPrevWorkspace(PWORKSPACE);
@@ -298,9 +293,11 @@ bool CKeybindManager::tryMoveFocusToMonitor(CMonitor* monitor) {
         g_pCompositor->focusWindow(PNEWWINDOW);
         PNEWWINDOW->warpCursor();
 
-        g_pInputManager->m_pForcedFocus = PNEWWINDOW;
-        g_pInputManager->simulateMouseMovement();
-        g_pInputManager->m_pForcedFocus.reset();
+        if (*PNOWARPS == 0 || *PFOLLOWMOUSE < 2) {
+            g_pInputManager->m_pForcedFocus = PNEWWINDOW;
+            g_pInputManager->simulateMouseMovement();
+            g_pInputManager->m_pForcedFocus.reset();
+        }
     } else {
         g_pCompositor->focusWindow(nullptr);
         g_pCompositor->warpCursorTo(monitor->middle());
@@ -311,7 +308,10 @@ bool CKeybindManager::tryMoveFocusToMonitor(CMonitor* monitor) {
 }
 
 void CKeybindManager::switchToWindow(PHLWINDOW PWINDOWTOCHANGETO) {
-    const auto PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
+    static auto PFOLLOWMOUSE = CConfigValue<Hyprlang::INT>("input:follow_mouse");
+    static auto PNOWARPS     = CConfigValue<Hyprlang::INT>("cursor:no_warps");
+
+    const auto  PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
 
     if (PWINDOWTOCHANGETO == PLASTWINDOW || !PWINDOWTOCHANGETO)
         return;
@@ -319,25 +319,28 @@ void CKeybindManager::switchToWindow(PHLWINDOW PWINDOWTOCHANGETO) {
     // remove constraints
     g_pInputManager->unconstrainMouse();
 
-    if (PLASTWINDOW && PLASTWINDOW->m_pWorkspace == PWINDOWTOCHANGETO->m_pWorkspace && PLASTWINDOW->m_bIsFullscreen) {
+    if (PLASTWINDOW && PLASTWINDOW->m_pWorkspace == PWINDOWTOCHANGETO->m_pWorkspace && PLASTWINDOW->isFullscreen()) {
         const auto PWORKSPACE = PLASTWINDOW->m_pWorkspace;
-        const auto FSMODE     = PWORKSPACE->m_efFullscreenMode;
+        const auto MODE       = PWORKSPACE->m_efFullscreenMode;
 
         if (!PWINDOWTOCHANGETO->m_bPinned)
-            g_pCompositor->setWindowFullscreen(PLASTWINDOW, false, FULLSCREEN_FULL);
+            g_pCompositor->setWindowFullscreenInternal(PLASTWINDOW, FSMODE_NONE);
 
         g_pCompositor->focusWindow(PWINDOWTOCHANGETO);
 
         if (!PWINDOWTOCHANGETO->m_bPinned)
-            g_pCompositor->setWindowFullscreen(PWINDOWTOCHANGETO, true, FSMODE);
+            g_pCompositor->setWindowFullscreenInternal(PWINDOWTOCHANGETO, MODE);
     } else {
         updateRelativeCursorCoords();
         g_pCompositor->focusWindow(PWINDOWTOCHANGETO);
         PWINDOWTOCHANGETO->warpCursor();
 
-        g_pInputManager->m_pForcedFocus = PWINDOWTOCHANGETO;
-        g_pInputManager->simulateMouseMovement();
-        g_pInputManager->m_pForcedFocus.reset();
+        // Move mouse focus to the new window if required by current follow_mouse and warp modes
+        if (*PNOWARPS == 0 || *PFOLLOWMOUSE < 2) {
+            g_pInputManager->m_pForcedFocus = PWINDOWTOCHANGETO;
+            g_pInputManager->simulateMouseMovement();
+            g_pInputManager->m_pForcedFocus.reset();
+        }
 
         if (PLASTWINDOW && PLASTWINDOW->m_iMonitorID != PWINDOWTOCHANGETO->m_iMonitorID) {
             // event
@@ -366,8 +369,8 @@ bool CKeybindManager::onKeyEvent(std::any event, SP<IKeyboard> pKeyboard) {
 
     const auto         KEYCODE = e.keycode + 8; // Because to xkbcommon it's +8 from libinput
 
-    const xkb_keysym_t keysym         = xkb_state_key_get_one_sym(pKeyboard->resolveBindsBySym ? pKeyboard->xkbTranslationState : m_pXKBTranslationState, KEYCODE);
-    const xkb_keysym_t internalKeysym = xkb_state_key_get_one_sym(pKeyboard->wlr()->xkb_state, KEYCODE);
+    const xkb_keysym_t keysym         = xkb_state_key_get_one_sym(pKeyboard->resolveBindsBySym ? pKeyboard->xkbStaticState : m_pXKBTranslationState, KEYCODE);
+    const xkb_keysym_t internalKeysym = xkb_state_key_get_one_sym(pKeyboard->xkbState, KEYCODE);
 
     if (handleInternalKeybinds(internalKeysym))
         return true;
@@ -525,10 +528,7 @@ bool CKeybindManager::onMouseEvent(const IPointer::SButtonEvent& e) {
 }
 
 void CKeybindManager::resizeWithBorder(const IPointer::SButtonEvent& e) {
-    if (e.state == WL_POINTER_BUTTON_STATE_PRESSED)
-        mouse("1resizewindow");
-    else
-        mouse("0resizewindow");
+    changeMouseBindMode(e.state == WL_POINTER_BUTTON_STATE_PRESSED ? MBIND_RESIZE : MBIND_INVALID);
 }
 
 void CKeybindManager::onSwitchEvent(const std::string& switchName) {
@@ -554,7 +554,7 @@ int repeatKeyHandler(void* data) {
     Debug::log(LOG, "Keybind repeat triggered, calling dispatcher.");
     DISPATCHER->second((*ppActiveKeybind)->arg);
 
-    wl_event_source_timer_update(g_pKeybindManager->m_pActiveKeybindEventSource, 1000 / g_pSeatManager->keyboard->wlr()->repeat_info.rate);
+    wl_event_source_timer_update(g_pKeybindManager->m_pActiveKeybindEventSource, 1000 / g_pSeatManager->keyboard->repeatRate);
 
     return 0;
 }
@@ -604,10 +604,8 @@ bool CKeybindManager::handleKeybinds(const uint32_t modmask, const SPressedKeyWi
 
     static auto PDISABLEINHIBIT = CConfigValue<Hyprlang::INT>("binds:disable_keybind_grabbing");
 
-    if (!*PDISABLEINHIBIT && PROTO::shortcutsInhibit->isInhibited()) {
+    if (!*PDISABLEINHIBIT && PROTO::shortcutsInhibit->isInhibited())
         Debug::log(LOG, "Keybind handling is disabled due to an inhibitor");
-        return false;
-    }
 
     for (auto& k : m_lKeybinds) {
         const bool SPECIALDISPATCHER = k.handler == "global" || k.handler == "pass" || k.handler == "sendshortcut" || k.handler == "mouse";
@@ -615,6 +613,9 @@ bool CKeybindManager::handleKeybinds(const uint32_t modmask, const SPressedKeyWi
             std::find_if(m_vPressedSpecialBinds.begin(), m_vPressedSpecialBinds.end(), [&](const auto& other) { return other == &k; }) != m_vPressedSpecialBinds.end();
         const bool IGNORECONDITIONS =
             SPECIALDISPATCHER && !pressed && SPECIALTRIGGERED; // ignore mods. Pass, global dispatchers should be released immediately once the key is released.
+
+        if (!k.dontInhibit && !*PDISABLEINHIBIT && PROTO::shortcutsInhibit->isInhibited())
+            continue;
 
         if (!k.locked && g_pSessionLockManager->isSessionLocked())
             continue;
@@ -786,7 +787,7 @@ bool CKeybindManager::handleVT(xkb_keysym_t keysym) {
     // beyond this point, return true to not handle anything else.
     // we'll avoid printing shit to active windows.
 
-    if (g_pCompositor->m_sWLRSession) {
+    if (g_pCompositor->m_pAqBackend->hasSession()) {
         const unsigned int TTY = keysym - XKB_KEY_XF86Switch_VT_1 + 1;
 
         // vtnr is bugged for some reason.
@@ -810,19 +811,7 @@ bool CKeybindManager::handleVT(xkb_keysym_t keysym) {
 
         Debug::log(LOG, "Switching from VT {} to VT {}", ttynum, TTY);
 
-        if (!wlr_session_change_vt(g_pCompositor->m_sWLRSession, TTY))
-            return true; // probably same session
-
-        g_pCompositor->m_bSessionActive = false;
-
-        for (auto& m : g_pCompositor->m_vMonitors) {
-            m->noFrameSchedule = true;
-            m->framesToSkip    = 1;
-        }
-
-        Debug::log(LOG, "Switched to VT {}, destroyed all render data, frames to skip for each: 2", TTY);
-
-        return true;
+        g_pCompositor->m_pAqBackend->session->switchVT(TTY);
     }
 
     return true;
@@ -904,6 +893,7 @@ uint64_t CKeybindManager::spawnRaw(std::string args) {
             for (auto& e : HLENV) {
                 setenv(e.first.c_str(), e.second.c_str(), 1);
             }
+            setenv("WAYLAND_DISPLAY", g_pCompositor->m_szWLDisplaySocket.c_str(), 1);
             close(socket[0]);
             close(socket[1]);
             execl("/bin/sh", "/bin/sh", "-c", args.c_str(), nullptr);
@@ -966,7 +956,8 @@ static void toggleActiveFloatingCore(std::string args, std::optional<bool> float
         return;
 
     // remove drag status
-    g_pInputManager->currentlyDraggedWindow.reset();
+    if (!g_pInputManager->currentlyDraggedWindow.expired())
+        g_pKeybindManager->changeMouseBindMode(MBIND_INVALID);
 
     if (PWINDOW->m_sGroupData.pNextWindow.lock() && PWINDOW->m_sGroupData.pNextWindow.lock() != PWINDOW) {
         const auto PCURRENT = PWINDOW->getGroupCurrent();
@@ -985,7 +976,7 @@ static void toggleActiveFloatingCore(std::string args, std::optional<bool> float
         g_pLayoutManager->getCurrentLayout()->changeWindowFloatingMode(PWINDOW);
     }
     g_pCompositor->updateWorkspaceWindows(PWINDOW->workspaceID());
-    g_pCompositor->updateWorkspaceSpecialRenderData(PWINDOW->workspaceID());
+    g_pCompositor->updateWorkspaceWindowData(PWINDOW->workspaceID());
     g_pLayoutManager->getCurrentLayout()->recalculateMonitor(PWINDOW->m_iMonitorID);
     g_pCompositor->updateAllWindowsAnimatedDecorationValues();
 }
@@ -1005,7 +996,7 @@ void CKeybindManager::setActiveTiled(std::string args) {
 void CKeybindManager::centerWindow(std::string args) {
     const auto PWINDOW = g_pCompositor->m_pLastWindow.lock();
 
-    if (!PWINDOW || !PWINDOW->m_bIsFloating || PWINDOW->m_bIsFullscreen)
+    if (!PWINDOW || !PWINDOW->m_bIsFloating || PWINDOW->isFullscreen())
         return;
 
     const auto PMONITOR = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID);
@@ -1031,7 +1022,7 @@ void CKeybindManager::toggleActivePseudo(std::string args) {
 
     PWINDOW->m_bIsPseudotiled = !PWINDOW->m_bIsPseudotiled;
 
-    if (!PWINDOW->m_bIsFullscreen)
+    if (!PWINDOW->isFullscreen())
         g_pLayoutManager->getCurrentLayout()->recalculateWindow(PWINDOW);
 }
 
@@ -1040,7 +1031,8 @@ SWorkspaceIDName getWorkspaceToChangeFromArgs(std::string args, PHLWORKSPACE PCU
         return getWorkspaceIDNameFromString(args);
     }
 
-    const SWorkspaceIDName PPREVWS = PCURRENTWORKSPACE->getPrevWorkspaceIDName(args.contains("_per_monitor"));
+    const bool             PER_MON = args.contains("_per_monitor");
+    const SWorkspaceIDName PPREVWS = PCURRENTWORKSPACE->getPrevWorkspaceIDName(PER_MON);
     // Do nothing if there's no previous workspace, otherwise switch to it.
     if (PPREVWS.id == -1) {
         Debug::log(LOG, "No previous workspace to change to");
@@ -1048,8 +1040,11 @@ SWorkspaceIDName getWorkspaceToChangeFromArgs(std::string args, PHLWORKSPACE PCU
     }
 
     const auto ID = PCURRENTWORKSPACE->m_iID;
-    if (const auto PWORKSPACETOCHANGETO = g_pCompositor->getWorkspaceByID(PPREVWS.id); PWORKSPACETOCHANGETO)
+    if (const auto PWORKSPACETOCHANGETO = g_pCompositor->getWorkspaceByID(PPREVWS.id); PWORKSPACETOCHANGETO) {
+        if (PER_MON && PCURRENTWORKSPACE->m_iMonitorID != PWORKSPACETOCHANGETO->m_iMonitorID)
+            return {WORKSPACE_NOT_CHANGED, ""};
         return {ID, PWORKSPACETOCHANGETO->m_szName};
+    }
 
     return {ID, PPREVWS.name.empty() ? std::to_string(PPREVWS.id) : PPREVWS.name};
 }
@@ -1154,10 +1149,52 @@ void CKeybindManager::fullscreenActive(std::string args) {
     if (!PWINDOW)
         return;
 
-    PWINDOW->m_bDontSendFullscreen = false;
-    if (args == "2")
-        PWINDOW->m_bDontSendFullscreen = true;
-    g_pCompositor->setWindowFullscreen(PWINDOW, !PWINDOW->m_bIsFullscreen, args == "1" ? FULLSCREEN_MAXIMIZED : FULLSCREEN_FULL);
+    const eFullscreenMode MODE = args == "1" ? FSMODE_MAXIMIZED : FSMODE_FULLSCREEN;
+
+    if (PWINDOW->isEffectiveInternalFSMode(MODE))
+        g_pCompositor->setWindowFullscreenInternal(PWINDOW, FSMODE_NONE);
+    else
+        g_pCompositor->setWindowFullscreenInternal(PWINDOW, MODE);
+}
+
+void CKeybindManager::fullscreenStateActive(std::string args) {
+    const auto PWINDOW = g_pCompositor->m_pLastWindow.lock();
+    const auto ARGS    = CVarList(args, 2, ' ');
+
+    if (!PWINDOW)
+        return;
+
+    int internalMode, clientMode;
+    try {
+        internalMode = std::stoi(ARGS[0]);
+    } catch (std::exception& e) { internalMode = -1; }
+    try {
+        clientMode = std::stoi(ARGS[1]);
+    } catch (std::exception& e) { clientMode = -1; }
+
+    const sFullscreenState STATE = sFullscreenState{.internal = (internalMode != -1 ? (eFullscreenMode)internalMode : PWINDOW->m_sFullscreenState.internal),
+                                                    .client   = (clientMode != -1 ? (eFullscreenMode)clientMode : PWINDOW->m_sFullscreenState.client)};
+
+    if (internalMode != -1 && clientMode != -1 && PWINDOW->m_sFullscreenState.internal == STATE.internal && PWINDOW->m_sFullscreenState.client == STATE.client) {
+        g_pCompositor->setWindowFullscreenState(PWINDOW, sFullscreenState{.internal = FSMODE_NONE, .client = FSMODE_NONE});
+        PWINDOW->m_sWindowData.syncFullscreen = CWindowOverridableVar(true, PRIORITY_SET_PROP);
+        return;
+    }
+
+    if (internalMode != -1 && clientMode == -1 && PWINDOW->m_sFullscreenState.internal == STATE.internal) {
+        g_pCompositor->setWindowFullscreenState(PWINDOW, sFullscreenState{.internal = PWINDOW->m_sFullscreenState.client, .client = PWINDOW->m_sFullscreenState.client});
+        PWINDOW->m_sWindowData.syncFullscreen = CWindowOverridableVar(true, PRIORITY_SET_PROP);
+        return;
+    }
+
+    if (internalMode == -1 && clientMode != -1 && PWINDOW->m_sFullscreenState.client == STATE.client) {
+        g_pCompositor->setWindowFullscreenState(PWINDOW, sFullscreenState{.internal = PWINDOW->m_sFullscreenState.internal, .client = PWINDOW->m_sFullscreenState.internal});
+        PWINDOW->m_sWindowData.syncFullscreen = CWindowOverridableVar(true, PRIORITY_SET_PROP);
+        return;
+    }
+
+    PWINDOW->m_sWindowData.syncFullscreen = CWindowOverridableVar(false, PRIORITY_SET_PROP);
+    g_pCompositor->setWindowFullscreenState(PWINDOW, STATE);
 }
 
 void CKeybindManager::moveActiveToWorkspace(std::string args) {
@@ -1282,7 +1319,7 @@ void CKeybindManager::moveFocusTo(std::string args) {
         return;
     }
 
-    const auto PWINDOWTOCHANGETO = *PFULLCYCLE && PLASTWINDOW->m_bIsFullscreen ?
+    const auto PWINDOWTOCHANGETO = *PFULLCYCLE && PLASTWINDOW->isFullscreen() ?
         (arg == 'd' || arg == 'b' || arg == 'r' ? g_pCompositor->getNextWindowOnWorkspace(PLASTWINDOW, true) : g_pCompositor->getPrevWindowOnWorkspace(PLASTWINDOW, true)) :
         g_pCompositor->getWindowInDirection(PLASTWINDOW, arg);
 
@@ -1339,7 +1376,7 @@ void CKeybindManager::swapActive(std::string args) {
 
     Debug::log(LOG, "Swapping active window in direction {}", arg);
     const auto PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
-    if (!PLASTWINDOW || PLASTWINDOW->m_bIsFullscreen)
+    if (!PLASTWINDOW || PLASTWINDOW->isFullscreen())
         return;
 
     const auto PWINDOWTOCHANGETO = g_pCompositor->getWindowInDirection(PLASTWINDOW, arg);
@@ -1377,24 +1414,25 @@ void CKeybindManager::moveActiveTo(std::string args) {
 
     const auto PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
 
-    if (!PLASTWINDOW || PLASTWINDOW->m_bIsFullscreen)
+    if (!PLASTWINDOW || PLASTWINDOW->isFullscreen())
         return;
 
     if (PLASTWINDOW->m_bIsFloating) {
-        Vector2D   vPos;
-        const auto PMONITOR   = g_pCompositor->getMonitorFromID(PLASTWINDOW->m_iMonitorID);
-        const auto BORDERSIZE = PLASTWINDOW->getRealBorderSize();
+        std::optional<float> vPosx, vPosy;
+        const auto           PMONITOR   = g_pCompositor->getMonitorFromID(PLASTWINDOW->m_iMonitorID);
+        const auto           BORDERSIZE = PLASTWINDOW->getRealBorderSize();
 
         switch (arg) {
-            case 'l': vPos.x = PMONITOR->vecReservedTopLeft.x + BORDERSIZE + PMONITOR->vecPosition.x; break;
-            case 'r': vPos.x = PMONITOR->vecSize.x - PMONITOR->vecReservedBottomRight.x - PLASTWINDOW->m_vRealSize.goal().x - BORDERSIZE + PMONITOR->vecPosition.x; break;
+            case 'l': vPosx = PMONITOR->vecReservedTopLeft.x + BORDERSIZE + PMONITOR->vecPosition.x; break;
+            case 'r': vPosx = PMONITOR->vecSize.x - PMONITOR->vecReservedBottomRight.x - PLASTWINDOW->m_vRealSize.goal().x - BORDERSIZE + PMONITOR->vecPosition.x; break;
             case 't':
-            case 'u': vPos.y = PMONITOR->vecReservedTopLeft.y + BORDERSIZE + PMONITOR->vecPosition.y; break;
+            case 'u': vPosy = PMONITOR->vecReservedTopLeft.y + BORDERSIZE + PMONITOR->vecPosition.y; break;
             case 'b':
-            case 'd': vPos.y = PMONITOR->vecSize.y - PMONITOR->vecReservedBottomRight.y - PLASTWINDOW->m_vRealSize.goal().y - BORDERSIZE + PMONITOR->vecPosition.y; break;
+            case 'd': vPosy = PMONITOR->vecSize.y - PMONITOR->vecReservedBottomRight.y - PLASTWINDOW->m_vRealSize.goal().y - BORDERSIZE + PMONITOR->vecPosition.y; break;
         }
 
-        PLASTWINDOW->m_vRealPosition = Vector2D(vPos.x != 0 ? vPos.x : PLASTWINDOW->m_vRealPosition.goal().x, vPos.y != 0 ? vPos.y : PLASTWINDOW->m_vRealPosition.goal().y);
+        PLASTWINDOW->m_vRealPosition = Vector2D(vPosx.value_or(PLASTWINDOW->m_vRealPosition.goal().x), vPosy.value_or(PLASTWINDOW->m_vRealPosition.goal().y));
+
         return;
     }
 
@@ -1431,7 +1469,8 @@ void CKeybindManager::toggleGroup(std::string args) {
     if (!PWINDOW)
         return;
 
-    g_pCompositor->setWindowFullscreen(PWINDOW, false, FULLSCREEN_FULL);
+    if (PWINDOW->isFullscreen())
+        g_pCompositor->setWindowFullscreenInternal(PWINDOW, FSMODE_NONE);
 
     if (PWINDOW->m_sGroupData.pNextWindow.expired())
         PWINDOW->createGroup();
@@ -1665,7 +1704,7 @@ void CKeybindManager::renameWorkspace(std::string args) {
 }
 
 void CKeybindManager::exitHyprland(std::string argz) {
-    g_pCompositor->m_bExitTriggered = true;
+    g_pCompositor->stopCompositor();
 }
 
 void CKeybindManager::moveCurrentWorkspaceToMonitor(std::string args) {
@@ -1678,7 +1717,6 @@ void CKeybindManager::moveCurrentWorkspaceToMonitor(std::string args) {
 
     // get the current workspace
     const auto PCURRENTWORKSPACE = g_pCompositor->m_pLastMonitor->activeWorkspace;
-
     if (!PCURRENTWORKSPACE) {
         Debug::log(ERR, "moveCurrentWorkspaceToMonitor invalid workspace!");
         return;
@@ -1824,7 +1862,7 @@ void CKeybindManager::forceRendererReload(std::string args) {
 void CKeybindManager::resizeActive(std::string args) {
     const auto PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
 
-    if (!PLASTWINDOW || PLASTWINDOW->m_bIsFullscreen)
+    if (!PLASTWINDOW || PLASTWINDOW->isFullscreen())
         return;
 
     const auto SIZ = g_pCompositor->parseWindowVectorArgsRelative(args, PLASTWINDOW->m_vRealSize.goal());
@@ -1841,7 +1879,7 @@ void CKeybindManager::resizeActive(std::string args) {
 void CKeybindManager::moveActive(std::string args) {
     const auto PLASTWINDOW = g_pCompositor->m_pLastWindow.lock();
 
-    if (!PLASTWINDOW || PLASTWINDOW->m_bIsFullscreen)
+    if (!PLASTWINDOW || PLASTWINDOW->isFullscreen())
         return;
 
     const auto POS = g_pCompositor->parseWindowVectorArgsRelative(args, PLASTWINDOW->m_vRealPosition.goal());
@@ -1861,7 +1899,7 @@ void CKeybindManager::moveWindow(std::string args) {
         return;
     }
 
-    if (PWINDOW->m_bIsFullscreen)
+    if (PWINDOW->isFullscreen())
         return;
 
     const auto POS = g_pCompositor->parseWindowVectorArgsRelative(MOVECMD, PWINDOW->m_vRealPosition.goal());
@@ -1881,7 +1919,7 @@ void CKeybindManager::resizeWindow(std::string args) {
         return;
     }
 
-    if (PWINDOW->m_bIsFullscreen)
+    if (PWINDOW->isFullscreen())
         return;
 
     const auto SIZ = g_pCompositor->parseWindowVectorArgsRelative(MOVECMD, PWINDOW->m_vRealSize.goal());
@@ -1958,12 +1996,12 @@ void CKeybindManager::focusWindow(std::string regexp) {
             g_pCompositor->focusWindow(PWINDOW);
         } else {
             if (FSWINDOW != PWINDOW && !PWINDOW->m_bPinned)
-                g_pCompositor->setWindowFullscreen(FSWINDOW, false, FULLSCREEN_FULL);
+                g_pCompositor->setWindowFullscreenClient(FSWINDOW, FSMODE_NONE);
 
             g_pCompositor->focusWindow(PWINDOW);
 
             if (FSWINDOW != PWINDOW && !PWINDOW->m_bPinned)
-                g_pCompositor->setWindowFullscreen(PWINDOW, true, FSMODE);
+                g_pCompositor->setWindowFullscreenClient(PWINDOW, FSMODE);
         }
     } else
         g_pCompositor->focusWindow(PWINDOW);
@@ -2128,8 +2166,8 @@ void CKeybindManager::sendshortcut(std::string args) {
         const auto KEYPAIRSTRING = std::format("{}{}", (uintptr_t)KB.get(), KEY);
 
         if (!g_pKeybindManager->m_mKeyToCodeCache.contains(KEYPAIRSTRING)) {
-            xkb_keymap*   km = KB->wlr()->keymap;
-            xkb_state*    ks = KB->xkbTranslationState;
+            xkb_keymap*   km = KB->xkbKeymap;
+            xkb_state*    ks = KB->xkbState;
 
             xkb_keycode_t keycode_min, keycode_max;
             keycode_min = xkb_keymap_min_keycode(km);
@@ -2240,18 +2278,6 @@ void CKeybindManager::layoutmsg(std::string msg) {
     g_pLayoutManager->getCurrentLayout()->layoutMessage(hd, msg);
 }
 
-void CKeybindManager::toggleOpaque(std::string unused) {
-    const auto PWINDOW = g_pCompositor->m_pLastWindow.lock();
-
-    if (!PWINDOW)
-        return;
-
-    PWINDOW->m_sAdditionalConfigData.forceOpaque           = !PWINDOW->m_sAdditionalConfigData.forceOpaque;
-    PWINDOW->m_sAdditionalConfigData.forceOpaqueOverridden = true;
-
-    g_pHyprRenderer->damageWindow(PWINDOW);
-}
-
 void CKeybindManager::dpms(std::string arg) {
     bool        enable = arg.starts_with("on");
     std::string port   = "";
@@ -2267,7 +2293,7 @@ void CKeybindManager::dpms(std::string arg) {
         if (!port.empty() && m->szName != port)
             continue;
 
-        wlr_output_state_set_enabled(m->state.wlr(), enable);
+        m->output->state->setEnabled(enable);
 
         m->dpmsStatus = enable;
 
@@ -2347,11 +2373,19 @@ void CKeybindManager::pinActive(std::string args) {
         return;
     }
 
-    if (!PWINDOW->m_bIsFloating || PWINDOW->m_bIsFullscreen)
+    if (!PWINDOW->m_bIsFloating || PWINDOW->isFullscreen())
         return;
 
-    PWINDOW->m_bPinned    = !PWINDOW->m_bPinned;
-    PWINDOW->m_pWorkspace = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID)->activeWorkspace;
+    PWINDOW->m_bPinned = !PWINDOW->m_bPinned;
+
+    const auto PMONITOR = g_pCompositor->getMonitorFromID(PWINDOW->m_iMonitorID);
+
+    if (!PMONITOR) {
+        Debug::log(ERR, "pin: monitor not found");
+        return;
+    }
+
+    PWINDOW->m_pWorkspace = PMONITOR->activeWorkspace;
 
     PWINDOW->updateDynamicRules();
     g_pCompositor->updateWindowAnimatedDecorationValues(PWINDOW);
@@ -2368,54 +2402,50 @@ void CKeybindManager::mouse(std::string args) {
     const auto ARGS    = CVarList(args.substr(1), 2, ' ');
     const auto PRESSED = args[0] == '1';
 
+    if (!PRESSED) {
+        changeMouseBindMode(MBIND_INVALID);
+        return;
+    }
+
     if (ARGS[0] == "movewindow") {
-        if (PRESSED) {
-            g_pKeybindManager->m_bIsMouseBindActive = true;
-
-            const auto mouseCoords = g_pInputManager->getMouseCoordsInternal();
-            PHLWINDOW  pWindow     = g_pCompositor->vectorToWindowUnified(mouseCoords, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
-
-            if (pWindow && !pWindow->m_bIsFullscreen)
-                pWindow->checkInputOnDecos(INPUT_TYPE_DRAG_START, mouseCoords);
-
-            if (g_pInputManager->currentlyDraggedWindow.expired())
-                g_pInputManager->currentlyDraggedWindow = pWindow;
-
-            g_pInputManager->dragMode = MBIND_MOVE;
-            g_pLayoutManager->getCurrentLayout()->onBeginDragWindow();
-        } else {
-            g_pKeybindManager->m_bIsMouseBindActive = false;
-
-            if (!g_pInputManager->currentlyDraggedWindow.expired()) {
-                g_pLayoutManager->getCurrentLayout()->onEndDragWindow();
-                g_pInputManager->currentlyDraggedWindow.reset();
-                g_pInputManager->dragMode = MBIND_INVALID;
+        changeMouseBindMode(MBIND_MOVE);
+    } else {
+        try {
+            switch (std::stoi(ARGS[1])) {
+                case 1: changeMouseBindMode(MBIND_RESIZE_FORCE_RATIO); break;
+                case 2: changeMouseBindMode(MBIND_RESIZE_BLOCK_RATIO); break;
+                default: changeMouseBindMode(MBIND_RESIZE);
             }
-        }
-    } else if (ARGS[0] == "resizewindow") {
-        if (PRESSED) {
-            g_pKeybindManager->m_bIsMouseBindActive = true;
+        } catch (std::exception& e) { changeMouseBindMode(MBIND_RESIZE); }
+    }
+}
 
-            g_pInputManager->currentlyDraggedWindow =
-                g_pCompositor->vectorToWindowUnified(g_pInputManager->getMouseCoordsInternal(), RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
+void CKeybindManager::changeMouseBindMode(const eMouseBindMode MODE) {
+    if (MODE != MBIND_INVALID) {
+        if (!g_pInputManager->currentlyDraggedWindow.expired() || g_pInputManager->dragMode != MBIND_INVALID)
+            return;
 
-            try {
-                switch (std::stoi(ARGS[1])) {
-                    case 1: g_pInputManager->dragMode = MBIND_RESIZE_FORCE_RATIO; break;
-                    case 2: g_pInputManager->dragMode = MBIND_RESIZE_BLOCK_RATIO; break;
-                    default: g_pInputManager->dragMode = MBIND_RESIZE;
-                }
-            } catch (std::exception& e) { g_pInputManager->dragMode = MBIND_RESIZE; }
-            g_pLayoutManager->getCurrentLayout()->onBeginDragWindow();
-        } else {
-            g_pKeybindManager->m_bIsMouseBindActive = false;
+        const auto      MOUSECOORDS = g_pInputManager->getMouseCoordsInternal();
+        const PHLWINDOW PWINDOW     = g_pCompositor->vectorToWindowUnified(MOUSECOORDS, RESERVED_EXTENTS | INPUT_EXTENTS | ALLOW_FLOATING);
 
-            if (!g_pInputManager->currentlyDraggedWindow.expired()) {
-                g_pLayoutManager->getCurrentLayout()->onEndDragWindow();
-                g_pInputManager->currentlyDraggedWindow.reset();
-                g_pInputManager->dragMode = MBIND_INVALID;
-            }
-        }
+        if (!PWINDOW)
+            return;
+
+        if (!PWINDOW->isFullscreen() && MODE == MBIND_MOVE)
+            PWINDOW->checkInputOnDecos(INPUT_TYPE_DRAG_START, MOUSECOORDS);
+
+        if (g_pInputManager->currentlyDraggedWindow.expired())
+            g_pInputManager->currentlyDraggedWindow = PWINDOW;
+
+        g_pInputManager->dragMode = MODE;
+
+        g_pLayoutManager->getCurrentLayout()->onBeginDragWindow();
+    } else {
+        if (g_pInputManager->currentlyDraggedWindow.expired() || g_pInputManager->dragMode == MBIND_INVALID)
+            return;
+
+        g_pLayoutManager->getCurrentLayout()->onEndDragWindow();
+        g_pInputManager->dragMode = MODE;
     }
 }
 
@@ -2447,14 +2477,6 @@ void CKeybindManager::alterZOrder(std::string args) {
     }
 
     g_pInputManager->simulateMouseMovement();
-}
-
-void CKeybindManager::fakeFullscreenActive(std::string args) {
-    if (!g_pCompositor->m_pLastWindow.expired()) {
-        // will also set the flag
-        g_pCompositor->m_pLastWindow->m_bFakeFullscreenState = !g_pCompositor->m_pLastWindow->m_bFakeFullscreenState;
-        g_pXWaylandManager->setWindowFullscreen(g_pCompositor->m_pLastWindow.lock(), g_pCompositor->m_pLastWindow->shouldSendFullscreenState());
-    }
 }
 
 void CKeybindManager::lockGroups(std::string args) {
@@ -2493,6 +2515,11 @@ void CKeybindManager::moveWindowIntoGroup(PHLWINDOW pWindow, PHLWINDOW pWindowIn
     updateRelativeCursorCoords();
 
     g_pLayoutManager->getCurrentLayout()->onWindowRemoved(pWindow); // This removes groupped property!
+
+    if (pWindow->m_iMonitorID != pWindowInDirection->m_iMonitorID) {
+        pWindow->moveToWorkspace(pWindowInDirection->m_pWorkspace);
+        pWindow->m_iMonitorID = pWindowInDirection->m_iMonitorID;
+    }
 
     static auto USECURRPOS = CConfigValue<Hyprlang::INT>("group:insert_after_current");
     pWindowInDirection     = *USECURRPOS ? pWindowInDirection : pWindowInDirection->getGroupTail();
@@ -2611,7 +2638,7 @@ void CKeybindManager::moveWindowOrGroup(std::string args) {
     }
 
     const auto PWINDOW = g_pCompositor->m_pLastWindow.lock();
-    if (!PWINDOW || PWINDOW->m_bIsFullscreen)
+    if (!PWINDOW || PWINDOW->isFullscreen())
         return;
 
     if (!*PIGNOREGROUPLOCK && g_pKeybindManager->m_bGroupsLocked) {
@@ -2681,10 +2708,10 @@ void CKeybindManager::global(std::string args) {
     if (NAME.empty())
         return;
 
-    if (!g_pProtocolManager->m_pGlobalShortcutsProtocolManager->globalShortcutExists(APPID, NAME))
+    if (!PROTO::globalShortcuts->isTaken(APPID, NAME))
         return;
 
-    g_pProtocolManager->m_pGlobalShortcutsProtocolManager->sendGlobalShortcutEvent(APPID, NAME, g_pKeybindManager->m_iPassPressed);
+    PROTO::globalShortcuts->sendGlobalShortcutEvent(APPID, NAME, g_pKeybindManager->m_iPassPressed);
 }
 
 void CKeybindManager::moveGroupWindow(std::string args) {

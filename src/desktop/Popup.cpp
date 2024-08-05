@@ -22,7 +22,7 @@ CPopup::CPopup(SP<CXDGPopupResource> popup, CPopup* pOwner) : m_pParent(pOwner),
     m_pWindowOwner = pOwner->m_pWindowOwner;
 
     m_vLastSize = popup->surface->current.geometry.size();
-    unconstrain();
+    reposition();
 
     initAllSignals();
 }
@@ -55,7 +55,7 @@ void CPopup::initAllSignals() {
 }
 
 void CPopup::onNewPopup(SP<CXDGPopupResource> popup) {
-    const auto POPUP = m_vChildren.emplace_back(std::make_unique<CPopup>(popup, this)).get();
+    const auto POPUP = m_vChildren.emplace_back(makeShared<CPopup>(popup, this)).get();
     Debug::log(LOG, "New popup at {:x}", (uintptr_t)POPUP);
 }
 
@@ -188,18 +188,18 @@ void CPopup::onReposition() {
 
     m_vLastPos = coordsRelativeToParent();
 
-    unconstrain();
+    reposition();
 }
 
-void CPopup::unconstrain() {
+void CPopup::reposition() {
     const auto COORDS   = t1ParentCoords();
     const auto PMONITOR = g_pCompositor->getMonitorFromVector(COORDS);
 
     if (!PMONITOR)
         return;
 
-    CBox box = {PMONITOR->vecPosition.x - COORDS.x, PMONITOR->vecPosition.y - COORDS.y, PMONITOR->vecSize.x, PMONITOR->vecSize.y};
-    m_pResource->applyPositioning(box, COORDS - PMONITOR->vecPosition);
+    CBox box = {PMONITOR->vecPosition.x, PMONITOR->vecPosition.y, PMONITOR->vecSize.x, PMONITOR->vecSize.y};
+    m_pResource->applyPositioning(box, COORDS);
 }
 
 Vector2D CPopup::coordsRelativeToParent() {
@@ -250,7 +250,8 @@ void CPopup::recheckTree() {
 }
 
 void CPopup::recheckChildrenRecursive() {
-    for (auto& c : m_vChildren) {
+    auto cpy = m_vChildren;
+    for (auto& c : cpy) {
         c->onCommit(true);
         c->recheckChildrenRecursive();
     }

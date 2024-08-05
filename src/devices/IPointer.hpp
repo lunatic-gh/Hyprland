@@ -5,17 +5,17 @@
 #include "../macros.hpp"
 #include "../helpers/math/Math.hpp"
 
-struct wlr_pointer;
+AQUAMARINE_FORWARD(IPointer);
 
 /*
     Base class for a pointer.
 */
 class IPointer : public IHID {
   public:
-    virtual uint32_t     getCapabilities();
-    virtual eHIDType     getType();
-    virtual bool         isVirtual() = 0;
-    virtual wlr_pointer* wlr()       = 0;
+    virtual uint32_t                 getCapabilities();
+    virtual eHIDType                 getType();
+    virtual bool                     isVirtual() = 0;
+    virtual SP<Aquamarine::IPointer> aq()        = 0;
 
     struct SMotionEvent {
         uint32_t timeMs = 0;
@@ -106,7 +106,8 @@ class IPointer : public IHID {
     } pointerEvents;
 
     std::string  hlName;
-    bool         connected = false; // means connected to the cursor
+    bool         connected   = false; // means connected to the cursor
+    std::string  boundOutput = "";
 
     WP<IPointer> self;
 };
